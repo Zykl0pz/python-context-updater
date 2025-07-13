@@ -31,6 +31,33 @@ Para instalar y utilizar `context.py`, sigue estos pasos:
    python context.py
    ```
 
+## Para usarlo con el comando getContext desde terminal en el directorio que estés(opcional):
+1. Abre tu archivo `~/.bashrc` en un editor de texto. Puedes usar `nano`, `vim`, o cualquier otro editor que prefieras. Por ejemplo, usando `nano`:
+
+   ```bash
+   nano ~/.bashrc
+   ```
+
+2. Agrega la siguiente línea al final del archivo:
+
+   ```bash
+   alias getContext='python3 $(find . -name "context.py" -print -quit)'
+   ```
+
+   Aquí, `find . -name "context.py" -print -quit` busca el archivo `context.py` en el directorio actual y sus subdirectorios. El uso de `-print -quit` asegura que solo se imprima la primera coincidencia y se detenga la búsqueda.
+
+3. Guarda los cambios y cierra el editor. Si usaste `nano`, puedes hacerlo presionando `CTRL + X`, luego `Y` para confirmar los cambios, y `Enter` para salir.
+
+4. Para que los cambios surtan efecto, recarga tu archivo `~/.bashrc` ejecutando:
+
+   ```bash
+   source ~/.bashrc
+   ```
+
+5. Ahora puedes usar el comando `getContext` en cualquier directorio. Si hay un archivo `context.py` en el directorio actual o en sus subdirectorios, se ejecutará.
+
+Ten en cuenta que este alias asume que tienes Python 3 instalado y que el archivo `context.py` es ejecutable con Python. Si necesitas usar una versión diferente de Python, simplemente reemplaza `python3` con el comando correspondiente.
+
 ## Guía de Uso
 
 ### Primeros Pasos
