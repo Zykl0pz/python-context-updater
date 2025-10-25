@@ -3,6 +3,7 @@ import os
 # Mapa de extensiones a lenguajes de programación
 language_map = {
     '.py': 'Python',
+    '.feature': 'Feature',
     '.js': 'JavaScript',
     '.jsx': 'ReactJS',
     '.tsx': 'ReactTS',
