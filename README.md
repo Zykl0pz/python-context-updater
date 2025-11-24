@@ -1,94 +1,192 @@
-# Documentación de `context.py`
+# Context Code Generator
 
-## Índice
-- [Introducción](#introducción)
-- [Instalación](#instalación)
-- [Guía de Uso](#guía-de-uso)
-  - [Primeros Pasos](#primeros-pasos)
-- [Funcionalidades](#funcionalidades)
-  - [Mapa de Extensiones a Lenguajes de Programación](#mapa-de-extensiones-a-lenguajes-de-programación)
-  - [Funciones Principales](#funciones-principales)
-- [Conclusión](#conclusión)
+Un script de Python que genera un archivo de contexto unificado (`context.txt`) a partir de los archivos de código y documentos en tu proyecto. Perfecto para proporcionar contexto a herramientas de IA, documentación o análisis de proyectos.
 
-## Introducción
-El archivo `context.py` es un script en Python que permite mapear extensiones de archivos a sus respectivos lenguajes de programación. Además, genera un archivo de texto que contiene la estructura de directorios y el contenido de los archivos en el directorio actual.
+## 🚀 Características
 
-## Instalación
-Para instalar y utilizar `context.py`, sigue estos pasos:
+- **Análisis completo de directorios**: Recorre recursivamente todos los subdirectorios
+- **Selección interactiva**: Elige qué extensiones de archivo incluir mediante un menú interactivo
+- **Múltiples formatos soportados**:
+  - **Código fuente**: Python, JavaScript, Java, C++, HTML, CSS, y [muchos más](#-lenguajes-soportados)
+  - **Documentos de Office**: DOCX, XLSX, PPTX, CSV
+  - **Archivos de configuración**: YAML, JSON, XML, etc.
+- **Detección automática de encoding**: Lee archivos con diferentes codificaciones sin problemas
+- **Sin dependencias externas**: Usa solo módulos estándar de Python
+- **Filtrado inteligente**: Omite automáticamente carpetas ocultas y archivos binarios
 
-1. **Clonar el repositorio**:
+## 📋 Lenguajes Soportados
+
+El script reconoce más de 70 extensiones de archivo, incluyendo:
+
+- **Lenguajes de programación**: Python, JavaScript, Java, C/C++, Rust, Go, Ruby, PHP, etc.
+- **Lenguajes web**: HTML, CSS, TypeScript, JSX, TSX
+- **Lenguajes funcionales**: Haskell, Elixir, Clojure, F#, OCaml
+- **Scripting**: Bash, PowerShell, Perl, Lua, Ruby
+- **Documentación**: Markdown, Texto, YAML
+- **Office**: DOCX, XLSX, PPTX, CSV
+
+[Ver lista completa de extensiones soportadas](https://github.com/tu-usuario/context-code-generator/blob/main/context.py#L4-L75)
+
+## 🛠️ Instalación
+
+1. **Clona el repositorio**:
    ```bash
-   git clone https://github.com/Fant324/Agencia-Empleadora-DPOO.git
-   cd Agencia-Empleadora-DPOO/src
+   git clone https://github.com/tu-usuario/context-code-generator.git
+   cd context-code-generator
    ```
 
-2. **Instalar Python**:
-   Asegúrate de tener Python instalado en tu sistema. Puedes descargarlo desde [python.org](https://www.python.org/downloads/).
-
-3. **Ejecutar el script**:
-   Una vez que estés en el directorio donde se encuentra `context.py`, puedes ejecutarlo con el siguiente comando:
+2. **Asegúrate de tener Python 3.6+**:
    ```bash
-   python context.py
+   python --version
    ```
 
-## Para usarlo con el comando getContext desde terminal en el directorio que estés(opcional):
-1. Abre tu archivo `~/.bashrc` en un editor de texto. Puedes usar `nano`, `vim`, o cualquier otro editor que prefieras. Por ejemplo, usando `nano`:
+No se requieren dependencias externas. El script usa solo módulos estándar de Python.
 
+## 📖 Uso
+
+### Uso Básico
+
+1. **Navega a tu proyecto**:
    ```bash
-   nano ~/.bashrc
+   cd /ruta/a/tu/proyecto
    ```
 
-2. Agrega la siguiente línea al final del archivo:
-
+2. **Ejecuta el script**:
    ```bash
-   alias getContext='python3 $(find . -name "context.py" -print -quit)'
+   python /ruta/al/script/context.py
    ```
 
-   Aquí, `find . -name "context.py" -print -quit` busca el archivo `context.py` en el directorio actual y sus subdirectorios. El uso de `-print -quit` asegura que solo se imprima la primera coincidencia y se detenga la búsqueda.
+3. **Sigue el menú interactivo**:
+   - Verás todas las extensiones disponibles en tu proyecto
+   - Selecciona usando números separados por comas
+   - Opciones especiales: `all`, `none`, `common`, `office`
 
-3. Guarda los cambios y cierra el editor. Si usaste `nano`, puedes hacerlo presionando `CTRL + X`, luego `Y` para confirmar los cambios, y `Enter` para salir.
+4. **Encuentra el resultado**:
+   - El archivo `context.txt` se generará en el directorio actual
+   - Contiene todo el código y contenido seleccionado en formato estructurado
 
-4. Para que los cambios surtan efecto, recarga tu archivo `~/.bashrc` ejecutando:
+### Opciones de Selección
 
-   ```bash
-   source ~/.bashrc
-   ```
+- **Números individuales**: `1,3,5` - Selecciona extensiones específicas
+- **`all`**: Incluye todas las extensiones reconocidas
+- **`none`**: No incluye ninguna extensión (sale del programa)
+- **`common`**: Selecciona extensiones comunes de programación
+- **`office`**: Selecciona solo documentos de Office (DOCX, XLSX, PPTX, CSV)
 
-5. Ahora puedes usar el comando `getContext` en cualquier directorio. Si hay un archivo `context.py` en el directorio actual o en sus subdirectorios, se ejecutará.
+### Ejemplo de Sesión
 
-Ten en cuenta que este alias asume que tienes Python 3 instalado y que el archivo `context.py` es ejecutable con Python. Si necesitas usar una versión diferente de Python, simplemente reemplaza `python3` con el comando correspondiente.
+```bash
+$ python context.py
 
-## Guía de Uso
+Generador de Contexto de Código
+========================================
+Este script analizará el directorio actual y generará un archivo 'context.txt'
+con el contenido de los archivos que selecciones.
 
-### Primeros Pasos
-1. **Estructura de Archivos**:
-   Asegúrate de que el directorio donde ejecutas el script contenga archivos con diferentes extensiones para que el script pueda mapearlos correctamente.
+Extensiones disponibles en el directorio (solo las reconocidas):
+============================================================
+ 1. .py        -> Python
+ 2. .js        -> JavaScript
+ 3. .html      -> HTML
+ 4. .css       -> CSS
+ 5. .json      -> JSON
+ 6. .md        -> Markdown
+ 7. .docx      -> Word Document
 
-2. **Ejecutar el Script**:
-   Al ejecutar el script, se generará un archivo llamado `context.txt` en el mismo directorio. Este archivo contendrá la lista de archivos y su respectivo lenguaje de programación.
+Opciones:
+  - Ingresa los números de las extensiones separados por comas (ej: 1,3,5)
+  - 'all' para seleccionar todas las extensiones
+  - 'none' para no seleccionar ninguna
+  - 'common' para seleccionar extensiones comunes de código
+  - 'office' para seleccionar extensiones de Office (docx, xlsx, pptx, csv)
 
-## Funcionalidades
+Tu selección: common
+```
 
-### Mapa de Extensiones a Lenguajes de Programación
-El script contiene un diccionario llamado `language_map` que mapea las extensiones de archivo a sus lenguajes de programación correspondientes. Aquí hay algunos ejemplos:
+## 📁 Estructura del Output
 
-- `.py` → Python
-- `.js` → JavaScript
-- `.html` → HTML
-- `.java` → Java
-- `.rb` → Ruby
+El archivo `context.txt` generado tiene el siguiente formato:
 
-### Funciones Principales
-1. **`get_language(extension)`**:
-   - **Descripción**: Esta función toma una extensión de archivo como argumento y devuelve el lenguaje de programación correspondiente utilizando el diccionario `language_map`.
-   - **Uso**:
-     ```python
-     language = get_language('.py')  # Devuelve 'Python'
-     ```
+```
+CONTEXTO DEL PROYECTO
+==================================================
+Extensiones incluidas: .py, .js, .html
 
-2. **`main()`**:
-   - **Descripción**: Esta es la función principal que se ejecuta al iniciar el script. Recorre todos los archivos en el directorio actual, determina su extensión y escribe la información en `context.txt`.
-   - **Uso**: No se llama directamente, se ejecuta automáticamente al correr el script.
+./src/main.py
+`Python
+# Contenido del archivo main.py
+`
 
-## Conclusión
-El script `context.py` es una herramienta útil para desarrolladores que desean mapear extensiones de archivos a lenguajes de programación y generar un informe de la estructura de archivos en un directorio. Asegúrate de tener Python instalado y sigue los pasos de instalación para comenzar a usarlo.
+./src/utils.js
+`JavaScript
+// Contenido del archivo utils.js
+`
+
+./documentacion.docx
+`Word Document
+Texto extraído del documento Word...
+`
+```
+
+## 🔧 Personalización
+
+### Agregar Nuevas Extensiones
+
+Edita el diccionario `language_map` en el script para agregar nuevas extensiones:
+
+```python
+language_map = {
+    '.nuevo': 'Nuevo Lenguaje',
+    # ... extensiones existentes
+}
+```
+
+### Excluir Carpetas
+
+El script excluye automáticamente:
+- Carpetas que comienzan con `.` (ocultas)
+- `__pycache__`
+- `node_modules` (si existe)
+
+Para agregar más exclusiones, modifica la línea:
+```python
+dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
+```
+
+## ⚠️ Limitaciones
+
+- **Archivos binarios**: Se detectan y omiten automáticamente
+- **Archivos de Office complejos**: Solo se extrae texto básico (sin formato, imágenes, etc.)
+- **Encoding muy raro**: Puede haber problemas con codificaciones poco comunes
+- **Archivos muy grandes**: Pueden ser lentos de procesar
+
+## 🐛 Solución de Problemas
+
+### Error: "No se encontraron archivos con extensiones reconocidas"
+- Verifica que el directorio contenga archivos con extensiones conocidas
+- Revisa que no estés en un directorio vacío o solo con archivos binarios
+
+### Error de encoding
+- El script intenta automáticamente múltiples codificaciones
+- Si falla, el contenido se marca como no legible
+
+### El archivo de salida está vacío
+- Verifica que hayas seleccionado extensiones existentes en el proyecto
+- Comprueba los permisos de escritura en el directorio
+
+## 🤝 Contribuciones
+
+Las contribuciones son bienvenidas. Puedes:
+
+1. Reportar bugs o sugerir nuevas características
+2. Agregar soporte para más extensiones de archivo
+3. Mejorar la detección de encoding
+4. Optimizar el rendimiento para proyectos grandes
+
+## 📄 Licencia
+
+Este proyecto está bajo la Licencia MIT. Ver el archivo `LICENSE` para más detalles.
+
+---
+
+**¿Te resulta útil este script?** ¡Dale una ⭐ al repositorio!
