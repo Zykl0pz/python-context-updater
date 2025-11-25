@@ -7,6 +7,8 @@ import csv
 language_map = {
     '.py': 'Python',
     '.feature': 'Feature',
+    '.prisma': 'Prisma',
+    '.db': 'Database',
     '.js': 'JavaScript',
     '.jsx': 'ReactJS',
     '.tsx': 'ReactTS',
@@ -273,7 +275,7 @@ def get_available_extensions():
     
     for root, dirs, files in os.walk('.'):
         # Filtrar carpetas ocultas y de sistema
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules']
         
         for filename in files:
             filepath = os.path.join(root, filename)
@@ -371,7 +373,7 @@ def main():
         
         for root, dirs, files in os.walk('.'):
             # Filtrar carpetas ocultas y de sistema
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules']
             
             for filename in files:
                 filepath = os.path.join(root, filename)
