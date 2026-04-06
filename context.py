@@ -6,6 +6,7 @@ import csv
 # Mapa de extensiones a lenguajes de programación
 language_map = {
     '.py': 'Python',
+    '.json': 'JSON',
     '.feature': 'Feature',
     '.prisma': 'Prisma',
     '.db': 'Database',
@@ -275,7 +276,7 @@ def get_available_extensions():
     
     for root, dirs, files in os.walk('.'):
         # Filtrar carpetas ocultas y de sistema
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules']
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules' and d != 'dist']
         
         for filename in files:
             filepath = os.path.join(root, filename)
@@ -345,11 +346,11 @@ def select_extensions_interactively():
             print("Por favor, ingresa una selección válida.")
 
 def main():
-    output_file = 'context.txt'
+    output_file = 'context.md'
     
     print("Generador de Contexto de Código")
     print("=" * 40)
-    print("Este script analizará el directorio actual y generará un archivo 'context.txt'")
+    print("Este script analizará el directorio actual y generará un archivo 'context.md'")
     print("con el contenido de los archivos que selecciones.\n")
     
     # Selección interactiva de extensiones
@@ -373,7 +374,7 @@ def main():
         
         for root, dirs, files in os.walk('.'):
             # Filtrar carpetas ocultas y de sistema
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules']
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules' and d != 'dist']
             
             for filename in files:
                 filepath = os.path.join(root, filename)
