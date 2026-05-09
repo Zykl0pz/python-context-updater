@@ -6,6 +6,15 @@ import csv
 # Mapa de extensiones a lenguajes de programación
 language_map = {
     '.py': 'Python',
+    '.php': 'PHP',
+    '.properties': 'Properties',
+    '.gradle': 'Groovy',
+    '.htaccess': 'HTACCESS',
+    '.bat': 'Windows Bash',
+    '.ps1': 'PowerShell',
+    '.sh': 'Bash Scripting',
+    '.env': 'ENV',
+    '.lock': 'LOCK',
     '.json': 'JSON',
     '.feature': 'Feature',
     '.prisma': 'Prisma',
@@ -90,6 +99,20 @@ COMMON_ENCODINGS = [
     'cp437',
     'ascii'
 ]
+
+# Directorios que se ignoran completamente en el árbol y en el recorrido
+IGNORED_DIRS = {
+    '__pycache__', 'node_modules', 'dist', 'out', 'build',
+    'venv', 'env', '.git', '.svn', '.hg', '.idea', '.vscode', 'vendor', 'samples', 'old'
+}
+
+def should_ignore_dir(dirname):
+    """Determina si un directorio debe ser ignorado."""
+    if dirname.startswith('.'):
+        return True
+    if dirname in IGNORED_DIRS:
+        return True
+    return False
 
 def get_language(extension):
     return language_map.get(extension, 'Texto')
@@ -275,8 +298,8 @@ def get_available_extensions():
     extensions = set()
     
     for root, dirs, files in os.walk('.'):
-        # Filtrar carpetas ocultas y de sistema
-        dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules' and d != 'dist']
+        # Filtrar carpetas ignoradas
+        dirs[:] = [d for d in dirs if not should_ignore_dir(d)]
         
         for filename in files:
             filepath = os.path.join(root, filename)
@@ -345,6 +368,58 @@ def select_extensions_interactively():
         else:
             print("Por favor, ingresa una selección válida.")
 
+def generate_directory_tree(start_path='.'):
+    """
+    Genera una representación en árbol de la estructura de directorios y archivos,
+    ignorando los directorios definidos en should_ignore_dir().
+    """
+    lines = []
+    lines.append(".")
+    
+    def walk_dir(current_path, prefix=""):
+        try:
+            items = os.listdir(current_path)
+        except PermissionError:
+            lines.append(prefix + "└── [Permiso denegado]")
+            return
+        
+        # Separar directorios y archivos, y ordenar alfabéticamente
+        dirs = []
+        files = []
+        for item in items:
+            full_path = os.path.join(current_path, item)
+            if os.path.isdir(full_path):
+                if not should_ignore_dir(item):
+                    dirs.append(item)
+            else:
+                files.append(item)
+        
+        dirs.sort()
+        files.sort()
+        
+        # Procesar directorios primero
+        for i, d in enumerate(dirs):
+            is_last_dir = (i == len(dirs) - 1) and (len(files) == 0)
+            connector = "└── " if is_last_dir else "├── "
+            lines.append(prefix + connector + d + "/")
+            
+            # Calcular prefijo para el siguiente nivel
+            if is_last_dir:
+                new_prefix = prefix + "    "
+            else:
+                new_prefix = prefix + "│   "
+            
+            walk_dir(os.path.join(current_path, d), new_prefix)
+        
+        # Luego archivos
+        for i, f in enumerate(files):
+            is_last_file = (i == len(files) - 1)
+            connector = "└── " if is_last_file else "├── "
+            lines.append(prefix + connector + f)
+    
+    walk_dir(start_path)
+    return '\n'.join(lines)
+
 def main():
     output_file = 'context.md'
     
@@ -361,8 +436,12 @@ def main():
         return
     
     print(f"\nExtensiones seleccionadas: {', '.join(selected_extensions)}")
-    print("Procesando archivos...")
+    print("Generando árbol de directorios...")
     
+    # Generar el árbol de directorios completo (ignorando lo configurado)
+    tree_text = generate_directory_tree()
+    
+    print("Procesando archivos...")
     file_count = 0
     
     with open(output_file, 'w', encoding='utf-8') as outfile:
@@ -372,9 +451,18 @@ def main():
         outfile.write(f"Extensiones incluidas: {', '.join(selected_extensions)}\n")
         outfile.write("=" * 50 + "\n\n")
         
+        # Añadir la sección del árbol de directorios
+        outfile.write("ESTRUCTURA DE DIRECTORIOS\n")
+        outfile.write("=" * 50 + "\n")
+        outfile.write(tree_text)
+        outfile.write("\n\n")
+        outfile.write("=" * 50 + "\n")
+        outfile.write("CONTENIDO DE ARCHIVOS SELECCIONADOS\n")
+        outfile.write("=" * 50 + "\n\n")
+        
         for root, dirs, files in os.walk('.'):
-            # Filtrar carpetas ocultas y de sistema
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__' and d != 'node_modules' and d != 'dist']
+            # Filtrar carpetas ignoradas
+            dirs[:] = [d for d in dirs if not should_ignore_dir(d)]
             
             for filename in files:
                 filepath = os.path.join(root, filename)
@@ -398,7 +486,7 @@ def main():
                         outfile.write(content)
                         
                         # Cerrar bloque
-                        outfile.write('`\n\n')
+                        outfile.write('\n`\n\n')
                         file_count += 1
     
     print(f"\n¡Proceso completado!")
