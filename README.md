@@ -1,192 +1,209 @@
-# Context Code Generator
+# Generador de Contexto de Código
 
-Un script de Python que genera un archivo de contexto unificado (`context.txt`) a partir de los archivos de código y documentos en tu proyecto. Perfecto para proporcionar contexto a herramientas de IA, documentación o análisis de proyectos.
+Script interactivo en Python para generar un documento de contexto del proyecto, ideal para alimentar modelos de lenguaje o para documentación rápida. Analiza el directorio actual, muestra un árbol de archivos con tamaños, y extrae el contenido de los archivos según las extensiones que elijas, exportándolo en diversos formatos (Markdown, JSON, XML, texto plano o solo estadísticas).
 
-## 🚀 Características
+## Requisitos
 
-- **Análisis completo de directorios**: Recorre recursivamente todos los subdirectorios
-- **Selección interactiva**: Elige qué extensiones de archivo incluir mediante un menú interactivo
-- **Múltiples formatos soportados**:
-  - **Código fuente**: Python, JavaScript, Java, C++, HTML, CSS, y [muchos más](#-lenguajes-soportados)
-  - **Documentos de Office**: DOCX, XLSX, PPTX, CSV
-  - **Archivos de configuración**: YAML, JSON, XML, etc.
-- **Detección automática de encoding**: Lee archivos con diferentes codificaciones sin problemas
-- **Sin dependencias externas**: Usa solo módulos estándar de Python
-- **Filtrado inteligente**: Omite automáticamente carpetas ocultas y archivos binarios
+- Python 3.7 o superior.
 
-## 📋 Lenguajes Soportados
+### Dependencias opcionales
 
-El script reconoce más de 70 extensiones de archivo, incluyendo:
+El script funciona perfectamente sin ellas, pero instalar alguna amplía sus capacidades:
 
-- **Lenguajes de programación**: Python, JavaScript, Java, C/C++, Rust, Go, Ruby, PHP, etc.
-- **Lenguajes web**: HTML, CSS, TypeScript, JSX, TSX
-- **Lenguajes funcionales**: Haskell, Elixir, Clojure, F#, OCaml
-- **Scripting**: Bash, PowerShell, Perl, Lua, Ruby
-- **Documentación**: Markdown, Texto, YAML
-- **Office**: DOCX, XLSX, PPTX, CSV
+| Librería              | Mejora                                                               | Instalación                         |
+|-----------------------|----------------------------------------------------------------------|-------------------------------------|
+| `charset-normalizer`  | Detección precisa de la codificación de archivos                     | `pip install charset-normalizer`    |
+| `pathspec`            | Soporte para reglas `.gitignore`                                     | `pip install pathspec`              |
+| `tqdm`                | Barra de progreso durante el procesamiento                           | `pip install tqdm`                  |
+| `PyPDF2` o `pdfplumber` | Extracción de texto de archivos PDF                                  | `pip install PyPDF2` o `pip install pdfplumber` |
 
-[Ver lista completa de extensiones soportadas](https://github.com/tu-usuario/context-code-generator/blob/main/context.py#L4-L75)
+## Uso
 
-## 🛠️ Instalación
+1. Coloca el script `context.py` en la raíz del proyecto que deseas analizar.
+2. Ejecuta:
 
-1. **Clona el repositorio**:
    ```bash
-   git clone https://github.com/tu-usuario/context-code-generator.git
-   cd context-code-generator
+   python context.py
    ```
 
-2. **Asegúrate de tener Python 3.6+**:
-   ```bash
-   python --version
-   ```
+3. Sigue las instrucciones interactivas:
+   - Selecciona las extensiones de archivo que quieres incluir (por números, `all`, `common`, `office`).
+   - Opcionalmente, define patrones de inclusión/exclusión (por ejemplo, `test_*.py` o `*.min.*`).
+   - Elige el formato de salida: Markdown, JSON, XML, texto plano, solo estadísticas o **todos los formatos**.
+   - Indica si deseas modo compacto y/o números de línea (para Markdown).
+   - Decide si guardar la configuración como perfil para futuras ejecuciones.
+4. El resultado se generará en uno o varios archivos:
+   - `context.md` / `context.json` / `context.xml` / `context.txt` según el formato elegido.
+   - `context_stats.json` con las estadísticas detalladas (siempre, excepto en modo solo estadísticas, en cuyo caso solo se genera este archivo).
+   - `context.log` con información de depuración.
 
-No se requieren dependencias externas. El script usa solo módulos estándar de Python.
+### Ejemplo de flujo
 
-## 📖 Uso
+```
+=== Generador de Contexto de Código ===
 
-### Uso Básico
-
-1. **Navega a tu proyecto**:
-   ```bash
-   cd /ruta/a/tu/proyecto
-   ```
-
-2. **Ejecuta el script**:
-   ```bash
-   python /ruta/al/script/context.py
-   ```
-
-3. **Sigue el menú interactivo**:
-   - Verás todas las extensiones disponibles en tu proyecto
-   - Selecciona usando números separados por comas
-   - Opciones especiales: `all`, `none`, `common`, `office`
-
-4. **Encuentra el resultado**:
-   - El archivo `context.txt` se generará en el directorio actual
-   - Contiene todo el código y contenido seleccionado en formato estructurado
-
-### Opciones de Selección
-
-- **Números individuales**: `1,3,5` - Selecciona extensiones específicas
-- **`all`**: Incluye todas las extensiones reconocidas
-- **`none`**: No incluye ninguna extensión (sale del programa)
-- **`common`**: Selecciona extensiones comunes de programación
-- **`office`**: Selecciona solo documentos de Office (DOCX, XLSX, PPTX, CSV)
-
-### Ejemplo de Sesión
-
-```bash
-$ python context.py
-
-Generador de Contexto de Código
-========================================
-Este script analizará el directorio actual y generará un archivo 'context.txt'
-con el contenido de los archivos que selecciones.
-
-Extensiones disponibles en el directorio (solo las reconocidas):
-============================================================
+Extensiones disponibles:
  1. .py        -> Python
  2. .js        -> JavaScript
- 3. .html      -> HTML
- 4. .css       -> CSS
- 5. .json      -> JSON
- 6. .md        -> Markdown
- 7. .docx      -> Word Document
+ ...
+ Tu selección: all
 
-Opciones:
-  - Ingresa los números de las extensiones separados por comas (ej: 1,3,5)
-  - 'all' para seleccionar todas las extensiones
-  - 'none' para no seleccionar ninguna
-  - 'common' para seleccionar extensiones comunes de código
-  - 'office' para seleccionar extensiones de Office (docx, xlsx, pptx, csv)
+ Formato de salida:
+ 1. Markdown (.md)
+ 2. JSON (.json)
+ 3. XML (.xml)
+ 4. Texto plano (.txt)
+ 5. Solo estadísticas (sin contenido de archivos)
+ 6. Todos los formatos (md, json, xml, txt)
+ Elige (1-6) [1]: 6
 
-Tu selección: common
+ ¿Modo compacto? (s/n) [n]: s
+ ¿Incluir números de línea? (s/n) [n]:
+ ¿Guardar este perfil para futuras ejecuciones? (s/n) [n]: s
+
+ ... (procesamiento) ...
+
+ === RESUMEN ===
+ Archivos generados: context.md, context.json, context.xml, context.txt
+ Archivos procesados: 42
+ Líneas totales: 5783
+ Tamaño total: 2.1 MB
+ Lenguajes: Python (25), JavaScript (10), Markdown (7)
 ```
 
-## 📁 Estructura del Output
+## Instalación como comando global (`getcurrentcontext`)
 
-El archivo `context.txt` generado tiene el siguiente formato:
+Para ejecutar la herramienta con un simple `getcurrentcontext` desde cualquier carpeta de proyecto, sigue estos pasos:
+
+### Linux / macOS
+
+1. **Asigna permisos de ejecución** al script y asegúrate de que tenga un *shebang* al inicio.  
+   El script ya incluye `#!/usr/bin/env python3` al comienzo; si no fuera así, añade esa línea como primera línea del archivo.  
+   Luego, hazlo ejecutable:
+
+   ```bash
+   chmod +x /ruta/completa/context.py
+   ```
+
+2. **Crea un alias** en tu archivo de configuración de shell (`.bashrc`, `.bash_aliases`, `.zshrc`, etc.).  
+   Abre el archivo correspondiente con un editor y añade la siguiente línea:
+
+   ```bash
+   alias getcurrentcontext='python /ruta/completa/context.py'
+   ```
+
+   > Nota: reemplaza `/ruta/completa/` por la ubicación real del script.
+
+   *Alternativa con el shebang* (si lo hiciste ejecutable):
+
+   ```bash
+   alias getcurrentcontext='/ruta/completa/context.py'
+   ```
+
+3. **Recarga la configuración** o abre una nueva terminal:
+
+   ```bash
+   source ~/.bashrc
+   ```
+
+4. **Uso**: navega a la carpeta del proyecto que quieres analizar y ejecuta:
+
+   ```bash
+   getcurrentcontext
+   ```
+
+### Windows
+
+#### Opción A: archivo batch (.bat)
+
+1. Crea un archivo `getcurrentcontext.bat` en una carpeta que esté en el PATH (por ejemplo, `C:\Windows` o una carpeta personalizada que añadas al PATH).  
+   Contenido del archivo:
+
+   ```batch
+   @echo off
+   python "C:\ruta\completa\context.py" %*
+   ```
+
+2. Ahora podrás ejecutar desde cualquier carpeta:
+
+   ```cmd
+   getcurrentcontext
+   ```
+
+#### Opción B: alias en PowerShell
+
+1. Abre PowerShell y edita tu perfil (si no existe, créalo):
+
+   ```powershell
+   notepad $PROFILE
+   ```
+
+2. Añade la función:
+
+   ```powershell
+   function getcurrentcontext {
+       python "C:\ruta\completa\context.py"
+   }
+   ```
+
+3. Guarda y recarga el perfil:
+
+   ```powershell
+   . $PROFILE
+   ```
+
+4. Ejecuta `getcurrentcontext` dentro de la carpeta del proyecto.
+
+> **Importante:** En todos los casos, el comando debe ejecutarse desde la raíz del proyecto que se desea analizar. El script siempre toma el directorio actual como punto de partida.
+
+## Archivos de configuración
+
+### `.contextignore`
+
+Al ejecutar el script por primera vez se crea automáticamente un archivo `.contextignore` con una lista de directorios ignorados por defecto (como `__pycache__`, `node_modules`, `.git`, etc.). Puedes editarlo para añadir más patrones (uno por línea). Se admiten patrones estilo glob y directorios terminados en `/`.
+
+Ejemplo de `.contextignore`:
 
 ```
-CONTEXTO DEL PROYECTO
-==================================================
-Extensiones incluidas: .py, .js, .html
+# Carpetas ignoradas por defecto
+__pycache__/
+node_modules/
+dist/
+.vscode/
 
-./src/main.py
-`Python
-# Contenido del archivo main.py
-`
-
-./src/utils.js
-`JavaScript
-// Contenido del archivo utils.js
-`
-
-./documentacion.docx
-`Word Document
-Texto extraído del documento Word...
-`
+# Añade tus propias reglas
+*.log
+temp/
 ```
 
-## 🔧 Personalización
+### `.context_profile.json`
 
-### Agregar Nuevas Extensiones
+Cuando decides guardar un perfil, se crea este archivo con la última configuración utilizada. En futuras ejecuciones se te preguntará si deseas cargarlo, ahorrando tiempo en selecciones repetitivas.
 
-Edita el diccionario `language_map` en el script para agregar nuevas extensiones:
+## Formatos de salida
 
-```python
-language_map = {
-    '.nuevo': 'Nuevo Lenguaje',
-    # ... extensiones existentes
-}
-```
+- **Markdown** (`context.md`): incluye metadatos, TOC, árbol de directorios y contenido de cada archivo en bloques de código con resaltado de sintaxis. Ideal para prompts de IA.
+- **JSON** (`context.json`): estructura anidada con metadatos, árbol y lista de archivos. Útil para procesamiento automatizado.
+- **XML** (`context.xml`): similar a JSON pero en formato XML.
+- **Texto plano** (`context.txt`): formato simple sin marcado.
+- **Solo estadísticas** (`context_stats.json`): no extrae contenidos, solo genera un archivo JSON con el resumen de archivos, tamaños y extensiones.
+- **Todos los formatos**: genera simultáneamente los cuatro archivos principales (md, json, xml, txt) junto con el de estadísticas.
 
-### Excluir Carpetas
+## Notas adicionales
 
-El script excluye automáticamente:
-- Carpetas que comienzan con `.` (ocultas)
-- `__pycache__`
-- `node_modules` (si existe)
+- Los **enlaces simbólicos** se ignoran para evitar recursividad y duplicados.
+- Los **archivos binarios** se detectan automáticamente (byte nulo + heurística de caracteres de control) y se omiten, registrándose en el log.
+- Los **archivos vacíos** se incluyen explícitamente con la etiqueta `[Archivo vacío]`.
+- La barra de progreso solo aparece si `tqdm` está instalado; en caso contrario se muestran mensajes simples.
+- La detección de encoding usa la caché interna para no re-leer archivos repetidamente.
+- La salida coloreada se desactiva automáticamente si la salida no es una terminal (ej. al redirigir a un archivo).
 
-Para agregar más exclusiones, modifica la línea:
-```python
-dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
-```
+## Solución de problemas
 
-## ⚠️ Limitaciones
+- Si faltan las librerías opcionales, el script lo indicará al inicio con un aviso (`⚠️`) y continuará con el comportamiento por defecto.
+- Si algún archivo no se puede leer (permisos, corrupción), se registra en `context.log` y se muestra en la lista de omitidos al final.
+- Para PDFs sin librerías instaladas, se indicará `[PDF no procesado (instala PyPDF2 o pdfplumber)]`.
 
-- **Archivos binarios**: Se detectan y omiten automáticamente
-- **Archivos de Office complejos**: Solo se extrae texto básico (sin formato, imágenes, etc.)
-- **Encoding muy raro**: Puede haber problemas con codificaciones poco comunes
-- **Archivos muy grandes**: Pueden ser lentos de procesar
+## Licencia
 
-## 🐛 Solución de Problemas
-
-### Error: "No se encontraron archivos con extensiones reconocidas"
-- Verifica que el directorio contenga archivos con extensiones conocidas
-- Revisa que no estés en un directorio vacío o solo con archivos binarios
-
-### Error de encoding
-- El script intenta automáticamente múltiples codificaciones
-- Si falla, el contenido se marca como no legible
-
-### El archivo de salida está vacío
-- Verifica que hayas seleccionado extensiones existentes en el proyecto
-- Comprueba los permisos de escritura en el directorio
-
-## 🤝 Contribuciones
-
-Las contribuciones son bienvenidas. Puedes:
-
-1. Reportar bugs o sugerir nuevas características
-2. Agregar soporte para más extensiones de archivo
-3. Mejorar la detección de encoding
-4. Optimizar el rendimiento para proyectos grandes
-
-## 📄 Licencia
-
-Este proyecto está bajo la Licencia MIT. Ver el archivo `LICENSE` para más detalles.
-
----
-
-**¿Te resulta útil este script?** ¡Dale una ⭐ al repositorio!
+Este proyecto se distribuye bajo la licencia MIT. Siéntete libre de modificarlo y compartirlo.
