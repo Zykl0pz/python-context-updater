@@ -74,7 +74,7 @@ logger.addHandler(ch)
 
 # ─── Mapa de extensiones a lenguajes ───────────────────────────────────────
 language_map = {
-    '.py': 'Python', '.php': 'PHP', '.properties': 'Properties', '.gradle': 'Groovy',
+    '.py': 'Python','.md': 'Markdown', '.php': 'PHP', '.properties': 'Properties', '.gradle': 'Groovy',
     '.htaccess': 'HTACCESS', '.bat': 'Windows Bash', '.ps1': 'PowerShell', '.sh': 'Bash Scripting',
     '.env': 'ENV', '.lock': 'LOCK', '.json': 'JSON', '.feature': 'Feature', '.prisma': 'Prisma',
     '.db': 'Database', '.js': 'JavaScript', '.jsx': 'ReactJS', '.tsx': 'ReactTS',
