@@ -5,13 +5,16 @@
 Renombra archivos de forma interactiva: menú paso a paso.
 Normaliza: minúsculas/casefold, espacios por '_', unicode opcional.
 Resuelve colisiones globalmente, con detección de sistemas case‑insensitive.
+Incluye modo --undo para deshacer el último renombrado.
 """
 
+import json
 import logging
 import os
 import re
 import sys
 import unicodedata
+from datetime import datetime
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Optional
@@ -38,8 +41,9 @@ logging.basicConfig(format='%(message)s', level=logging.INFO)
 
 # ─── Constantes ────────────────────────────────────────────────────────────
 PROFILE_FILE = '.rename_profile.json'
+RENAME_LOG = '.rename_history.json'  # archivo para deshacer cambios
 
-# ─── Funciones de normalización y colisiones (MEJORADAS) ───────────────────
+# ─── Funciones de normalización y colisiones ───────────────────────────────
 def obtener_archivos(
     directorio: Path,
     excluir_patrones: list[str],
@@ -107,9 +111,13 @@ def resolver_colisiones(
         resultado[ruta_orig] = candidato
     return resultado
 
-def renombrar_archivos(plan: dict[Path, Path], dry_run: bool = False) -> tuple[int, int]:
-    """Ejecuta los renombrados; retorna (éxitos, errores)."""
+def renombrar_archivos(plan: dict[Path, Path], dry_run: bool = False) -> tuple[int, int, list[tuple[str, str]]]:
+    """
+    Ejecuta los renombrados.
+    Retorna (éxitos, errores, lista de cambios exitosos como (origen, destino)).
+    """
     exitos = errores = 0
+    cambios = []
     for origen, destino in plan.items():
         if origen == destino:
             logger.info(f"Sin cambios: {origen.name}")
@@ -120,20 +128,54 @@ def renombrar_archivos(plan: dict[Path, Path], dry_run: bool = False) -> tuple[i
             else:
                 origen.rename(destino)
                 logger.info(f"Renombrado: {origen.name} -> {destino.name}")
+                cambios.append((str(origen), str(destino)))
             exitos += 1
         except Exception as e:
             logger.error(f"Error al renombrar {origen.name}: {e}")
             errores += 1
-    return exitos, errores
+    return exitos, errores, cambios
 
-# ─── Menú interactivo (reemplaza a argparse) ───────────────────────────────
+# ─── Funciones de logging y deshacer ─────────────────────────────────────
+def log_rename(log_path: str, changes: list[tuple[str, str]]) -> None:
+    """Guarda la lista de renombrados en un JSON."""
+    data = {
+        'timestamp': datetime.now().isoformat(),
+        'renames': [{'from': src, 'to': dst} for src, dst in changes]
+    }
+    with open(log_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    logger.info(colored(f"Log de renombrado guardado en {log_path}", Colors.GREEN))
+
+def undo_rename(log_path: str) -> None:
+    """Deshace el último renombrado leyendo el log."""
+    if not os.path.isfile(log_path):
+        print(colored(f"No se encontró el log de deshacer ({log_path}).", Colors.FAIL))
+        return
+    with open(log_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    renames = data.get('renames', [])
+    if not renames:
+        print("El log está vacío.")
+        return
+    print(f"Deshaciendo {len(renames)} renombrados...")
+    for entry in renames:
+        src = entry['to']    # ahora existe como "to"
+        dst = entry['from']  # nombre original
+        try:
+            Path(src).rename(Path(dst))
+            print(f"Restaurado: {Path(src).name} -> {Path(dst).name}")
+        except Exception as e:
+            logger.error(f"Error al deshacer {src}: {e}")
+    os.remove(log_path)
+    print("Log eliminado.")
+
+# ─── Menú interactivo ─────────────────────────────────────────────────────
 def cargar_perfil() -> Optional[dict]:
     if Path(PROFILE_FILE).is_file():
         resp = input(colored(f"¿Cargar perfil guardado ({PROFILE_FILE})? (s/n) [s]: ", Colors.CYAN)).strip().lower()
         if resp in ('', 's', 'si'):
             try:
                 with open(PROFILE_FILE, 'r', encoding='utf-8') as f:
-                    import json
                     perfil = json.load(f)
                 print(colored("Perfil cargado.", Colors.GREEN))
                 return perfil
@@ -144,7 +186,6 @@ def cargar_perfil() -> Optional[dict]:
 def guardar_perfil(config: dict) -> None:
     try:
         with open(PROFILE_FILE, 'w', encoding='utf-8') as f:
-            import json
             json.dump(config, f, indent=2, ensure_ascii=False)
         print(colored(f"Perfil guardado en {PROFILE_FILE}", Colors.GREEN))
     except Exception as e:
@@ -253,6 +294,11 @@ def mostrar_vista_previa(archivos, reemplazo, normalize):
         print(f"{ruta.name:<40} {nuevo_nombre_base + extension}")
 
 def main() -> None:
+    # ─── Modo deshacer ────────────────────────────────────
+    if len(sys.argv) > 1 and sys.argv[1] == '--undo':
+        undo_rename(RENAME_LOG)
+        sys.exit(0)
+
     print(colored("Renombrador interactivo de archivos", Colors.BOLD))
     config = menu_configuracion()
 
@@ -307,7 +353,11 @@ def main() -> None:
         sys.exit(1)
 
     # Ejecutar (o simular)
-    exitos, errores = renombrar_archivos(plan, dry_run=dry_run)
+    exitos, errores, cambios = renombrar_archivos(plan, dry_run=dry_run)
+
+    # Guardar log si hubo cambios reales
+    if cambios and not dry_run:
+        log_rename(RENAME_LOG, cambios)
 
     # Resumen
     print(colored("\n--- RESUMEN ---", Colors.BOLD))
