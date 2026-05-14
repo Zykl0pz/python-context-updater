@@ -2,172 +2,117 @@
 # -*- coding: utf-8 -*-
 
 """
-Renombra archivos en un directorio siguiendo reglas configurables:
-- Todo a minúsculas (casefold) y espacios/espacios en blanco por '_'.
-- Colisión de nombres resuelta globalmente (sin sufijos innecesarios).
-- Opción de normalizar Unicode (NFKD → ASCII).
-- Interfaz de línea de comandos completa.
-- Usa pathlib para mayor claridad y robustez.
+Renombra archivos de forma interactiva: menú paso a paso.
+Normaliza: minúsculas/casefold, espacios por '_', unicode opcional.
+Resuelve colisiones globalmente, con detección de sistemas case‑insensitive.
 """
 
-import argparse
 import logging
+import os
 import re
 import sys
 import unicodedata
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import Optional
 
-# ----------------------------------------------------------------------
-# Configuración del logger
-# ----------------------------------------------------------------------
-logger = logging.getLogger("renombrador")
-logging.basicConfig(format="%(message)s", level=logging.WARNING)  # ajustable con -v/-q
+# ─── Colores ANSI para terminal ────────────────────────────────────────────
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
 
+def colored(text: str, color: str) -> str:
+    if sys.stdout.isatty():
+        return f"{color}{text}{Colors.ENDC}"
+    return text
 
-# ----------------------------------------------------------------------
-# Funciones auxiliares
-# ----------------------------------------------------------------------
+# ─── Logging ───────────────────────────────────────────────────────────────
+logger = logging.getLogger('renombrador_interactivo')
+logging.basicConfig(format='%(message)s', level=logging.INFO)
+
+# ─── Constantes ────────────────────────────────────────────────────────────
+PROFILE_FILE = '.rename_profile.json'
+
+# ─── Funciones de normalización y colisiones (MEJORADAS) ───────────────────
 def obtener_archivos(
     directorio: Path,
     excluir_patrones: list[str],
     seguir_enlaces: bool = False,
 ) -> list[Path]:
-    """
-    Lista los archivos del directorio que pueden renombrarse,
-    excluyendo el propio script, directorios, enlaces (opcional) y
-    archivos que coincidan con algún patrón de exclusión.
-    """
+    """Lista archivos a renombrar aplicando filtros."""
     script_ruta = Path(__file__).resolve()
     archivos = []
     for ruta in directorio.iterdir():
-        # 1. Solo archivos (excluir directorios)
         if not ruta.is_file():
             continue
-
-        # 13. Ignorar enlaces simbólicos si no se indica lo contrario
         if ruta.is_symlink() and not seguir_enlaces:
             logger.debug(f"Saltando enlace simbólico: {ruta.name}")
             continue
-
-        # Excluir el propio script
         try:
             if ruta.resolve() == script_ruta:
-                logger.debug(f"Saltando el script: {ruta.name}")
+                logger.debug(f"Saltando el propio script: {ruta.name}")
                 continue
         except OSError:
-            # Si no se puede resolver, asumir que no es el script
             pass
-
-        # Patrones de exclusión (estilo shell)
         nombre = ruta.name
         if any(fnmatch(nombre, patron) for patron in excluir_patrones):
             logger.debug(f"Excluido por patrón: {nombre}")
             continue
-
         archivos.append(ruta)
-
     return archivos
 
-
-def normalizar_nombre(
-    nombre: str,
-    reemplazo: str = "_",
-    normalizar_unicode: bool = False,
-) -> str:
-    """
-    Genera un nuevo nombre aplicando:
-    - Normalización Unicode opcional (NFKD → ASCII).
-    - Casefold (más agresivo que lower, p.ej. 'ß' -> 'ss').
-    - Colapsa cualquier secuencia de caracteres de espacio/blanco (\s+)
-      en el carácter de reemplazo.
-    - Elimina guiones bajos al inicio y final.
-    """
+def normalizar_nombre(nombre: str, reemplazo: str = "_", normalizar_unicode: bool = False) -> str:
+    """Genera nombre limpio: casefold, colapso de espacios, unicode opcional."""
     if normalizar_unicode:
-        # Descomponer y eliminar diacríticos, pasar a ASCII
         nombre = unicodedata.normalize("NFKD", nombre)
         nombre = nombre.encode("ascii", "ignore").decode("ascii")
-
-    # Casefold para lowercase agresivo
     nombre = nombre.casefold()
-
-    # Reemplazar cualquier secuencia de espacios (incluye tabs, saltos) por '_'
     nombre = re.sub(r"\s+", reemplazo, nombre)
-
-    # Limpiar guiones bajos sobrantes en extremos
     nombre = nombre.strip(reemplazo)
-
-    # Si el nombre queda vacío, asignar un nombre por defecto
     if not nombre:
         nombre = "archivo_sin_nombre"
-
     return nombre
-
 
 def resolver_colisiones(
     mapeo: list[tuple[Path, str]],
     directorio: Path,
     max_intentos: int = 1000,
 ) -> dict[Path, Path]:
-    """
-    A partir de una lista de (ruta_original, nombre_deseado),
-    asigna nuevos nombres sin colisiones reales entre sí ni con archivos
-    existentes no implicados en el renombrado.
-    Retorna un diccionario {ruta_original: nueva_ruta}.
-    """
-    # Conjunto de rutas ocupadas: archivos actuales que NO están en la lista
-    # de originales (así permitimos renombrar un archivo cambiando solo mayúsculas)
+    """Planifica renombrados sin colisiones (incluye detección de case‑insensitive)."""
     rutas_originales = {orig for orig, _ in mapeo}
     ocupados = set()
     for ruta in directorio.iterdir():
         if ruta.is_file() and ruta not in rutas_originales:
             ocupados.add(ruta)
-        # También se ignoran enlaces si no se van a procesar (ya filtrados)
 
     resultado = {}
-    # Procesar en orden predecible (alfabético por nombre original)
     for ruta_orig, nombre_deseado in sorted(mapeo, key=lambda x: x[0].name):
-        base = ruta_orig.stem  # nombre sin extensión
-        # Obtener la extensión completa (p. ej. ".tar.gz")
         extension_completa = "".join(ruta_orig.suffixes)
         candidato_nombre = nombre_deseado + extension_completa
         candidato = directorio / candidato_nombre
-
         intentos = 0
-        # 1. Evitar falsa colisión por case-insensitivity (mejora 1)
-        # Si el candidato existe pero es el mismo archivo (cambio de capitalización),
-        # no consideramos colisión.
         while candidato in ocupados and not candidato.samefile(ruta_orig):
             intentos += 1
             if intentos > max_intentos:
-                raise RuntimeError(
-                    f"Demasiados intentos de renombre para {ruta_orig.name}"
-                )
-            # Añadir sufijo numérico antes de la extensión
+                raise RuntimeError(f"Demasiados intentos para {ruta_orig.name}")
             nuevo_nombre = f"{nombre_deseado}_{intentos}{extension_completa}"
             candidato = directorio / nuevo_nombre
-
-        # Si el candidato es el mismo archivo (rename solo cambia capitalización),
-        # se permite; no se añade a ocupados porque ya estará reemplazado.
         ocupados.add(candidato)
         resultado[ruta_orig] = candidato
-
     return resultado
 
-
-def renombrar_archivos(
-    plan: dict[Path, Path],
-    dry_run: bool = False,
-) -> tuple[int, int]:
-    """
-    Ejecuta los renombrados según el plan.
-    Retorna (número de éxitos, número de errores).
-    """
-    exitos = 0
-    errores = 0
+def renombrar_archivos(plan: dict[Path, Path], dry_run: bool = False) -> tuple[int, int]:
+    """Ejecuta los renombrados; retorna (éxitos, errores)."""
+    exitos = errores = 0
     for origen, destino in plan.items():
         if origen == destino:
-            logger.info(f"Sin cambios (nombre normalizado idéntico): {origen.name}")
+            logger.info(f"Sin cambios: {origen.name}")
             continue
         try:
             if dry_run:
@@ -181,96 +126,155 @@ def renombrar_archivos(
             errores += 1
     return exitos, errores
 
+# ─── Menú interactivo (reemplaza a argparse) ───────────────────────────────
+def cargar_perfil() -> Optional[dict]:
+    if Path(PROFILE_FILE).is_file():
+        resp = input(colored(f"¿Cargar perfil guardado ({PROFILE_FILE})? (s/n) [s]: ", Colors.CYAN)).strip().lower()
+        if resp in ('', 's', 'si'):
+            try:
+                with open(PROFILE_FILE, 'r', encoding='utf-8') as f:
+                    import json
+                    perfil = json.load(f)
+                print(colored("Perfil cargado.", Colors.GREEN))
+                return perfil
+            except Exception as e:
+                logger.warning(f"No se pudo cargar el perfil: {e}")
+    return None
 
-# ----------------------------------------------------------------------
-# Configuración de línea de comandos (argparse)
-# ----------------------------------------------------------------------
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Renombra archivos: minúsculas, espacios por '_', y más."
-    )
-    parser.add_argument(
-        "-d", "--directory",
-        type=Path,
-        default=Path.cwd(),
-        help="Directorio a procesar (por defecto: directorio actual)",
-    )
-    parser.add_argument(
-        "-r", "--replace",
-        default="_",
-        help="Carácter para reemplazar espacios en blanco (defecto: '_')",
-    )
-    parser.add_argument(
-        "-e", "--exclude",
-        action="append",
-        default=[],
-        help="Patrones de exclusión (estilo shell), se puede repetir (ej.: -e '*.tmp' -e '.*')",
-    )
-    parser.add_argument(
-        "-n", "--dry-run",
-        action="store_true",
-        help="Muestra qué se haría sin modificar nada",
-    )
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Muestra más información (nivel INFO)",
-    )
-    parser.add_argument(
-        "-q", "--quiet",
-        action="store_true",
-        help="Solo muestra errores (nivel ERROR)",
-    )
-    parser.add_argument(
-        "--follow-symlinks",
-        action="store_true",
-        help="Procesar también enlaces simbólicos a archivos",
-    )
-    parser.add_argument(
-        "--normalize",
-        action="store_true",
-        help="Normaliza caracteres Unicode (NFKD) a ASCII (elimina acentos, ñ->n, etc.)",
-    )
-    parser.add_argument(
-        "--max-attempts",
-        type=int,
-        default=1000,
-        help="Límite de intentos para evitar bucles infinitos en colisiones",
-    )
-    return parser.parse_args()
-
-
-# ----------------------------------------------------------------------
-# Principal
-# ----------------------------------------------------------------------
-def main() -> None:
-    args = parse_args()
-
-    # Configurar nivel de logging
-    if args.quiet:
-        logging.getLogger().setLevel(logging.ERROR)
-    elif args.verbose:
-        logging.getLogger().setLevel(logging.INFO)
-    elif args.dry_run:
-        logging.getLogger().setLevel(logging.INFO)  # siempre mostrar simulación
-
-    directorio = args.directory.resolve()
-
-    if not directorio.is_dir():
-        logger.error(f"El directorio no existe: {directorio}")
-        sys.exit(1)
-
-    logger.info(f"Directorio: {directorio}")
-    if args.dry_run:
-        logger.info("*** MODO SIMULACIÓN (--dry-run) ***")
-
-    # 1. Obtener archivos a procesar
+def guardar_perfil(config: dict) -> None:
     try:
-        archivos = obtener_archivos(
-            directorio,
-            args.exclude,
-            seguir_enlaces=args.follow_symlinks,
-        )
+        with open(PROFILE_FILE, 'w', encoding='utf-8') as f:
+            import json
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        print(colored(f"Perfil guardado en {PROFILE_FILE}", Colors.GREEN))
+    except Exception as e:
+        logger.warning(f"No se pudo guardar el perfil: {e}")
+
+def menu_configuracion() -> dict:
+    """Recoge interactivamente todas las opciones y devuelve un diccionario."""
+    print(colored("\n=== CONFIGURACIÓN DEL RENOMBRADOR ===", Colors.HEADER + Colors.BOLD))
+    config = {}
+
+    # Intentar cargar perfil existente
+    perfil = cargar_perfil()
+    if perfil:
+        usar = input(colored("¿Usar la configuración del perfil? (s/n) [s]: ", Colors.CYAN)).strip().lower()
+        if usar in ('', 's', 'si'):
+            return perfil
+
+    # 1. Directorio
+    while True:
+        dir_str = input(colored("Directorio a procesar [.]: ", Colors.CYAN)).strip()
+        if not dir_str:
+            dir_str = '.'
+        try:
+            directorio = Path(dir_str).resolve()
+            if not directorio.is_dir():
+                print(colored("El directorio no existe.", Colors.WARNING))
+            else:
+                config['directory'] = str(directorio)
+                break
+        except Exception as e:
+            print(colored(f"Error: {e}", Colors.FAIL))
+
+    # 2. Carácter de reemplazo
+    reemplazo = input(colored("Carácter para reemplazar espacios [ '_' ]: ", Colors.CYAN)).strip()
+    config['replace'] = reemplazo if reemplazo else '_'
+
+    # 3. Normalizar Unicode
+    resp = input(colored("¿Normalizar caracteres Unicode a ASCII (quitar acentos)? (s/n) [n]: ", Colors.CYAN)).strip().lower()
+    config['normalize'] = resp in ('s', 'si')
+
+    # 4. Seguir enlaces simbólicos
+    resp = input(colored("¿Procesar enlaces simbólicos a archivos? (s/n) [n]: ", Colors.CYAN)).strip().lower()
+    config['follow_symlinks'] = resp in ('s', 'si')
+
+    # 5. Patrones de exclusión
+    config['exclude'] = []
+    print(colored("Patrones de exclusión (estilo shell, ej. '*.tmp', '.*'). Dejar vacío para terminar.", Colors.BLUE))
+    while True:
+        patron = input(colored("Patrón (Enter=fin): ", Colors.CYAN)).strip()
+        if not patron:
+            break
+        config['exclude'].append(patron)
+
+    # 6. Modo simulación
+    resp = input(colored("¿Ejecutar en modo simulación (dry-run)? (s/n) [n]: ", Colors.CYAN)).strip().lower()
+    config['dry_run'] = resp in ('s', 'si')
+
+    # 7. Límite de intentos para colisiones
+    max_intentos_str = input(colored("Máximo de sufijos numéricos en colisión [1000]: ", Colors.CYAN)).strip()
+    try:
+        config['max_attempts'] = int(max_intentos_str) if max_intentos_str else 1000
+    except ValueError:
+        print(colored("Valor no válido, usando 1000.", Colors.WARNING))
+        config['max_attempts'] = 1000
+
+    # 8. Nivel de detalle
+    print(colored("Nivel de detalle:", Colors.HEADER))
+    print("1. Normal (solo cambios)")
+    print("2. Silencioso (solo errores)")
+    print("3. Detallado (más información)")
+    while True:
+        nivel = input(colored("Elige (1-3) [1]: ", Colors.CYAN)).strip()
+        if nivel in ('', '1'):
+            config['verbose'] = False
+            config['quiet'] = False
+            break
+        elif nivel == '2':
+            config['verbose'] = False
+            config['quiet'] = True
+            break
+        elif nivel == '3':
+            config['verbose'] = True
+            config['quiet'] = False
+            break
+        else:
+            print(colored("Opción no válida.", Colors.WARNING))
+
+    # 9. Preguntar si desea guardar el perfil para el futuro
+    guardar = input(colored("¿Guardar esta configuración como perfil? (s/n) [s]: ", Colors.CYAN)).strip().lower()
+    if guardar in ('', 's', 'si'):
+        guardar_perfil(config)
+
+    return config
+
+def mostrar_vista_previa(archivos, reemplazo, normalize):
+    """Muestra qué archivos se renombrarán y cómo."""
+    if not archivos:
+        print(colored("No se encontraron archivos para renombrar.", Colors.WARNING))
+        return
+    print(colored("\n=== VISTA PREVIA ===", Colors.HEADER))
+    print(f"{'Original':<40} {'Nuevo nombre'}")
+    print("-" * 80)
+    for ruta in archivos:
+        nuevo_nombre_base = normalizar_nombre(ruta.stem, reemplazo, normalize)
+        extension = "".join(ruta.suffixes)
+        print(f"{ruta.name:<40} {nuevo_nombre_base + extension}")
+
+def main() -> None:
+    print(colored("Renombrador interactivo de archivos", Colors.BOLD))
+    config = menu_configuracion()
+
+    # Configurar logging según niveles elegidos
+    if config.get('quiet'):
+        logging.getLogger().setLevel(logging.ERROR)
+    elif config.get('verbose'):
+        logging.getLogger().setLevel(logging.DEBUG)
+    else:
+        logging.getLogger().setLevel(logging.INFO)
+
+    directorio = Path(config['directory']).resolve()
+    reemplazo = config['replace']
+    normalize = config['normalize']
+    seguir_enlaces = config['follow_symlinks']
+    excluir = config['exclude']
+    dry_run = config['dry_run']
+    max_intentos = config['max_attempts']
+
+    # Obtener archivos
+    try:
+        archivos = obtener_archivos(directorio, excluir, seguir_enlaces)
     except Exception as e:
         logger.error(f"Error al listar archivos: {e}")
         sys.exit(1)
@@ -279,43 +283,41 @@ def main() -> None:
         logger.info("No se encontraron archivos para procesar.")
         sys.exit(0)
 
-    logger.info(f"Archivos candidatos: {len(archivos)}")
+    # Mostrar vista previa siempre
+    mostrar_vista_previa(archivos, reemplazo, normalize)
 
-    # 2. Generar nombres normalizados (mapeo original -> nombre base deseado)
+    # Confirmar ejecución si no es dry-run
+    if not dry_run:
+        confirm = input(colored("\n¿Aplicar estos cambios? (s/n) [s]: ", Colors.CYAN)).strip().lower()
+        if confirm not in ('', 's', 'si'):
+            print(colored("Operación cancelada.", Colors.WARNING))
+            sys.exit(0)
+
+    # Generar mapeo base
     mapeo_base = []
     for ruta in archivos:
-        nombre_original = ruta.stem  # sin extensión
-        nuevo_nombre = normalizar_nombre(
-            nombre_original,
-            reemplazo=args.replace,
-            normalizar_unicode=args.normalize,
-        )
-        mapeo_base.append((ruta, nuevo_nombre))
+        nuevo_nombre_base = normalizar_nombre(ruta.stem, reemplazo, normalize)
+        mapeo_base.append((ruta, nuevo_nombre_base))
 
-    # 3. Resolver colisiones globalmente
+    # Resolver colisiones
     try:
-        plan = resolver_colisiones(
-            mapeo_base,
-            directorio,
-            max_intentos=args.max_attempts,
-        )
+        plan = resolver_colisiones(mapeo_base, directorio, max_intentos)
     except Exception as e:
-        logger.error(f"Error al planificar renombrados: {e}")
+        logger.error(f"Error planificando: {e}")
         sys.exit(1)
 
-    # 4. Ejecutar (o simular)
-    exitos, errores = renombrar_archivos(plan, dry_run=args.dry_run)
+    # Ejecutar (o simular)
+    exitos, errores = renombrar_archivos(plan, dry_run=dry_run)
 
-    # 5. Resumen final
-    logger.info("--- Resumen ---")
-    logger.info(f"Renombrados: {exitos}")
+    # Resumen
+    print(colored("\n--- RESUMEN ---", Colors.BOLD))
+    print(f"Renombrados: {exitos}")
     if errores:
-        logger.error(f"Errores: {errores}")
+        print(colored(f"Errores: {errores}", Colors.FAIL))
     if exitos == 0 and errores == 0:
-        logger.info("Todos los archivos ya tenían el nombre deseado.")
-    if args.dry_run:
-        logger.info("(no se realizaron cambios reales)")
-
+        print("Todos los archivos ya tenían el nombre deseado.")
+    if dry_run:
+        print("(modo simulación: no se realizaron cambios reales)")
 
 if __name__ == "__main__":
     main()
