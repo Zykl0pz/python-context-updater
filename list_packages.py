@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-Script multiplataforma para listar paquetes instalados en el sistema.
-Soporta decenas de gestores y fuentes en Linux, macOS y Windows.
-
-Uso: python3 list_all_packages.py
-Salida: pkgs.md (archivo Markdown)
+Lista todos los paquetes instalados en el sistema (Linux, macOS, Windows)
+soportando múltiples gestores. Salida en MD, JSON, XML, TXT o estadísticas.
+Modo interactivo o línea de comandos. Guarda perfiles.
 """
 
 import subprocess
@@ -15,20 +13,49 @@ import shutil
 import json
 import re
 import os
+import argparse
+import logging
+import getpass
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ---- Detección de SO ----
-def get_os():
-    system = platform.system().lower()
-    if system == 'linux':
-        return 'linux'
-    elif system == 'windows':
-        return 'windows'
-    elif system == 'darwin':
-        return 'macos'
-    else:
-        return 'unknown'
+# ─── Dependencias opcionales ───────────────────────────────────────────────
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
 
-# ---- Utilidades ----
+# ─── Colores ANSI ──────────────────────────────────────────────────────────
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def colored(text, color):
+    if sys.stdout.isatty():
+        return f"{color}{text}{Colors.ENDC}"
+    return text
+
+# ─── Logging ───────────────────────────────────────────────────────────────
+logger = logging.getLogger('pkg_list')
+logger.setLevel(logging.DEBUG)
+fh = logging.FileHandler('pkg_list.log', encoding='utf-8')
+fh.setLevel(logging.DEBUG)
+fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+ch.setFormatter(logging.Formatter('%(message)s'))
+logger.addHandler(fh)
+logger.addHandler(ch)
+
+# ─── Utilidades generales ──────────────────────────────────────────────────
 def run_command(cmd, shell=True, timeout=30):
     try:
         result = subprocess.run(cmd, shell=shell, capture_output=True, text=True, timeout=timeout)
@@ -41,28 +68,16 @@ def run_command(cmd, shell=True, timeout=30):
 def command_exists(cmd):
     return shutil.which(cmd) is not None
 
-def write_section(f, title, content, code_block=True):
-    f.write(f"## {title}\n\n")
-    if content is None:
-        f.write("⚠️ No se pudo obtener la lista o el gestor no está instalado.\n\n")
-    elif not content.strip():
-        f.write("✅ No hay paquetes instalados con este gestor.\n\n")
+def get_os():
+    system = platform.system().lower()
+    if system == 'linux':
+        return 'linux'
+    elif system == 'windows':
+        return 'windows'
+    elif system == 'darwin':
+        return 'macos'
     else:
-        if code_block:
-            f.write("```\n")
-            f.write(content)
-            f.write("\n```\n")
-        else:
-            f.write(content)
-        f.write("\n")
-
-def run_powershell(command):
-    """Ejecuta un comando de PowerShell en Windows y devuelve stdout."""
-    if get_os() != 'windows':
-        return None
-    full_cmd = f'powershell -NoProfile -Command "{command}"'
-    out, err, code = run_command(full_cmd)
-    return out if code == 0 else None
+        return 'unknown'
 
 def scan_directory_for_appimages(directory):
     """Escanea un directorio en busca de archivos .AppImage (Linux)."""
@@ -76,7 +91,15 @@ def scan_directory_for_appimages(directory):
         pass
     return None
 
-# ---- Linux específico ----
+def run_powershell(command):
+    """Ejecuta un comando de PowerShell en Windows y devuelve stdout."""
+    if get_os() != 'windows':
+        return None
+    full_cmd = f'powershell -NoProfile -Command "{command}"'
+    out, err, code = run_command(full_cmd)
+    return out if code == 0 else None
+
+# ─── Linux: APT ────────────────────────────────────────────────────────────
 def linux_apt():
     if not command_exists('dpkg-query'):
         return None
@@ -86,12 +109,12 @@ def linux_apt():
     return None
 
 def linux_apt_ppas():
-    """Lista los PPAs (repositorios personales) añadidos al sistema."""
     out, _, code = run_command("grep -rhE '^deb ' /etc/apt/sources.list.d/ 2>/dev/null")
     if code == 0 and out:
         return out
     return None
 
+# ─── Linux: Snap ───────────────────────────────────────────────────────────
 def linux_snap():
     if not command_exists('snap'):
         return None
@@ -108,6 +131,7 @@ def linux_snap():
             packages.append(f"{parts[0]} {parts[1]}")
     return "\n".join(sorted(packages))
 
+# ─── Linux: Flatpak ────────────────────────────────────────────────────────
 def linux_flatpak():
     if not command_exists('flatpak'):
         return None
@@ -129,6 +153,7 @@ def linux_flatpak():
             packages.append(f"{parts[0]} (sin versión)")
     return "\n".join(sorted(packages))
 
+# ─── Linux: Pacman (Arch) ──────────────────────────────────────────────────
 def linux_pacman():
     if not command_exists('pacman'):
         return None
@@ -137,6 +162,7 @@ def linux_pacman():
         return "\n".join(sorted(out.splitlines()))
     return None
 
+# ─── Linux: DNF (Fedora/RHEL) ──────────────────────────────────────────────
 def linux_dnf():
     if not command_exists('dnf'):
         return None
@@ -153,6 +179,7 @@ def linux_dnf():
         return "\n".join(sorted(lines))
     return None
 
+# ─── Linux: YUM (legacy) ───────────────────────────────────────────────────
 def linux_yum():
     if not command_exists('yum'):
         return None
@@ -169,24 +196,25 @@ def linux_yum():
         return "\n".join(sorted(lines))
     return None
 
+# ─── Linux: Zypper (OpenSUSE) ──────────────────────────────────────────────
 def linux_zypper():
     if not command_exists('zypper'):
         return None
     out, _, code = run_command("zypper se --installed-only 2>/dev/null")
     if code == 0 and out:
-        # El formato tiene cabeceras. Buscamos líneas con '|' (tabla)
         lines = []
         for line in out.splitlines():
             if '|' in line and not line.startswith('+--'):
                 parts = [p.strip() for p in line.split('|')]
                 if len(parts) >= 3:
                     name = parts[1]
-                    version = parts[2].split()[0]  # a veces hay más texto
+                    version = parts[2].split()[0]
                     if name and name not in ('Name', 'S'):
                         lines.append(f"{name} {version}")
         return "\n".join(sorted(lines))
     return None
 
+# ─── Linux: RPM (genérico) ─────────────────────────────────────────────────
 def linux_rpm():
     if not command_exists('rpm'):
         return None
@@ -195,8 +223,8 @@ def linux_rpm():
         return "\n".join(sorted(out.splitlines()))
     return None
 
+# ─── Linux: AppImage (escaneo directorios) ─────────────────────────────────
 def linux_appimage():
-    """Busca AppImages en ~/Applications y ~/AppImages."""
     home = str(Path.home())
     dirs = [f"{home}/Applications", f"{home}/AppImages", "/opt/appimages"]
     results = []
@@ -206,8 +234,8 @@ def linux_appimage():
             results.append(f"# {d}\n{apps}")
     return "\n\n".join(results) if results else None
 
+# ─── Linux: GNU Stow ───────────────────────────────────────────────────────
 def linux_gnu_stow():
-    """Lista los paquetes gestionados con GNU Stow (por defecto en /usr/local/stow)."""
     stow_dir = "/usr/local/stow"
     if os.path.isdir(stow_dir):
         try:
@@ -218,7 +246,7 @@ def linux_gnu_stow():
             pass
     return None
 
-# ---- macOS específico ----
+# ─── macOS: Homebrew ───────────────────────────────────────────────────────
 def macos_brew():
     if not command_exists('brew'):
         return None
@@ -234,6 +262,7 @@ def macos_brew():
         return "\n".join(sorted(lines))
     return None
 
+# ─── macOS: MacPorts ───────────────────────────────────────────────────────
 def macos_macports():
     if not command_exists('port'):
         return None
@@ -249,25 +278,24 @@ def macos_macports():
         return "\n".join(sorted(lines))
     return None
 
+# ─── macOS: pkgutil (paquetes .pkg) ────────────────────────────────────────
 def macos_pkgutil():
     out, _, code = run_command("pkgutil --pkgs")
     if code == 0 and out:
         return "\n".join(sorted(out.splitlines()))
     return None
 
+# ─── macOS: Mac App Store (mas) ────────────────────────────────────────────
 def macos_mas():
-    """Mac App Store apps (requiere mas CLI)."""
     if not command_exists('mas'):
         return None
     out, _, code = run_command("mas list")
     if code == 0 and out:
-        # Formato: "123456789  App Name (1.2.3)"
         lines = []
         for line in out.splitlines():
             line = line.strip()
             if not line:
                 continue
-            # Extraer nombre y versión
             match = re.match(r"\d+\s+(.+)\s\((.+)\)", line)
             if match:
                 name, version = match.groups()
@@ -277,13 +305,12 @@ def macos_mas():
         return "\n".join(sorted(lines))
     return None
 
+# ─── macOS: launchctl (agentes/daemons) ────────────────────────────────────
 def macos_launchctl():
-    """Lista agentes y demonios cargados (user). No requiere sudo."""
     out, _, code = run_command("launchctl list")
     if code == 0 and out:
-        # Formato: PID    Status  Label
         lines = []
-        for line in out.splitlines()[1:]:  # saltar cabecera
+        for line in out.splitlines()[1:]:
             parts = line.split()
             if len(parts) >= 3:
                 label = parts[2]
@@ -291,12 +318,10 @@ def macos_launchctl():
         return "\n".join(sorted(lines)) if lines else None
     return None
 
+# ─── macOS: system_profiler (aplicaciones .app) ────────────────────────────
 def macos_system_profiler():
-    """Lista todas las aplicaciones .app instaladas."""
     out, _, code = run_command("system_profiler SPApplicationsDataType")
     if code == 0 and out:
-        # Extraer líneas con "Location:" o "Version:" es complejo; mejor buscar nombres
-        # Versión simplificada: extraer líneas con "Location:" y el nombre de la app
         apps = set()
         lines = out.splitlines()
         current_app = None
@@ -309,11 +334,10 @@ def macos_system_profiler():
         return "\n".join(sorted(apps)) if apps else None
     return None
 
-# ---- Windows específico ----
+# ─── Windows: winget ───────────────────────────────────────────────────────
 def windows_winget():
     if not command_exists('winget'):
         return None
-    # Intentar con JSON
     out, _, code = run_command("winget list --disable-interactivity --output json")
     if code == 0 and out:
         try:
@@ -328,6 +352,7 @@ def windows_winget():
             pass
     return None
 
+# ─── Windows: Chocolatey ───────────────────────────────────────────────────
 def windows_chocolatey():
     if not command_exists('choco'):
         return None
@@ -341,6 +366,7 @@ def windows_chocolatey():
         return "\n".join(sorted(packages))
     return None
 
+# ─── Windows: Scoop ────────────────────────────────────────────────────────
 def windows_scoop():
     if not command_exists('scoop'):
         return None
@@ -360,6 +386,7 @@ def windows_scoop():
         return "\n".join(sorted(packages))
     return None
 
+# ─── Windows: Registro (programas MSI/EXE) ─────────────────────────────────
 def windows_registry():
     try:
         import winreg
@@ -399,20 +426,19 @@ def windows_registry():
                 pass
     return "\n".join(sorted(packages)) if packages else None
 
+# ─── Windows: WSL ──────────────────────────────────────────────────────────
 def windows_wsl():
-    """Lista distribuciones WSL instaladas."""
     if not command_exists('wsl'):
         return None
     out, _, code = run_command("wsl --list --verbose")
     if code == 0 and out:
         lines = out.splitlines()
-        # Saltar cabecera "  NAME      STATE           VERSION"
         if len(lines) > 1:
             return "\n".join(lines[1:])
     return None
 
+# ─── Windows: Extensiones VS Code ──────────────────────────────────────────
 def windows_vscode_extensions():
-    """Extensiones de VS Code instaladas."""
     if not command_exists('code'):
         return None
     out, _, code = run_command("code --list-extensions")
@@ -420,11 +446,10 @@ def windows_vscode_extensions():
         return out
     return None
 
+# ─── Windows: Módulos PowerShell instalados ────────────────────────────────
 def windows_powershell_modules():
-    """Módulos de PowerShell instalados."""
     out = run_powershell("Get-InstalledModule | Select-Object -Property Name,Version | Format-List")
     if out:
-        # Parsear: Name: xxx, Version: yyy
         modules = []
         for line in out.splitlines():
             line = line.strip()
@@ -436,19 +461,18 @@ def windows_powershell_modules():
         return "\n".join(sorted(modules)) if modules else None
     return None
 
+# ─── Windows: Características opcionales de Windows ────────────────────────
 def windows_features():
-    """Características opcionales de Windows (requiere admin)."""
     out = run_powershell("Get-WindowsOptionalFeature -Online | Where-Object {$_.State -eq 'Enabled'} | Select-Object FeatureName")
     if out:
         lines = [line.strip() for line in out.splitlines() if line.strip() and not line.startswith("FeatureName")]
         return "\n".join(sorted(lines)) if lines else None
     return None
 
-# ---- Multiplataforma (cualquier SO) ----
+# ─── Multiplataforma: asdf ─────────────────────────────────────────────────
 def generic_asdf():
     if not command_exists('asdf'):
         return None
-    # Listar plugins y sus versiones instaladas
     out, _, code = run_command("asdf plugin list")
     if code != 0 or not out:
         return None
@@ -459,7 +483,6 @@ def generic_asdf():
         if plugin:
             ver_out, _, _ = run_command(f"asdf list {plugin}")
             if ver_out:
-                # Eliminar asteriscos y espacios
                 versions = [v.strip(' *') for v in ver_out.splitlines() if v.strip()]
                 for v in versions:
                     result.append(f"{plugin} {v}")
@@ -467,19 +490,20 @@ def generic_asdf():
                 result.append(f"{plugin} (no versions)")
     return "\n".join(sorted(result)) if result else None
 
+# ─── Multiplataforma: Nix ──────────────────────────────────────────────────
 def generic_nix():
     if not command_exists('nix-env'):
         return None
     out, _, code = run_command("nix-env -q")
     if code == 0 and out:
         return out
-    # También probar nix profile
     if command_exists('nix'):
         out2, _, code2 = run_command("nix profile list")
         if code2 == 0 and out2:
             return out2
     return None
 
+# ─── Multiplataforma: Guix ─────────────────────────────────────────────────
 def generic_guix():
     if not command_exists('guix'):
         return None
@@ -488,6 +512,7 @@ def generic_guix():
         return out
     return None
 
+# ─── Multiplataforma: pip (Python) ─────────────────────────────────────────
 def generic_pip():
     if command_exists('pip3'):
         out, _, code = run_command("pip3 list --format=freeze")
@@ -499,16 +524,15 @@ def generic_pip():
             return out
     return None
 
+# ─── Multiplataforma: npm (Node.js) ────────────────────────────────────────
 def generic_npm():
     if not command_exists('npm'):
         return None
     out, _, code = run_command("npm list -g --depth=0")
     if code == 0 and out:
-        # La salida tiene árbol, extraemos líneas con ──
         packages = []
         for line in out.splitlines():
             if '──' in line:
-                # Formato: "├── package@version"
                 pkg_part = line.split('──')[-1].strip()
                 if '@' in pkg_part:
                     name, version = pkg_part.split('@', 1)
@@ -518,18 +542,17 @@ def generic_npm():
         return "\n".join(sorted(packages)) if packages else None
     return None
 
+# ─── Multiplataforma: gem (Ruby) ───────────────────────────────────────────
 def generic_gem():
     if not command_exists('gem'):
         return None
     out, _, code = run_command("gem list")
     if code == 0 and out:
-        # Formato: "package (version, otherversion)"
         packages = []
         for line in out.splitlines():
             match = re.match(r"(\S+)\s+\((.+)\)", line)
             if match:
                 name, versions = match.groups()
-                # Tomar la primera versión
                 first_version = versions.split(',')[0].strip()
                 packages.append(f"{name} {first_version}")
             else:
@@ -537,17 +560,16 @@ def generic_gem():
         return "\n".join(sorted(packages)) if packages else None
     return None
 
+# ─── Multiplataforma: cargo (Rust) ─────────────────────────────────────────
 def generic_cargo():
     if not command_exists('cargo'):
         return None
     out, _, code = run_command("cargo install --list")
     if code == 0 and out:
-        # Extraer líneas que contienen nombres de paquetes
         packages = []
         for line in out.splitlines():
             line = line.strip()
             if line and not line.startswith("cargo"):
-                # Formato: "package v0.1.0:"
                 parts = line.split()
                 if parts and len(parts) >= 2:
                     name = parts[0]
@@ -556,72 +578,315 @@ def generic_cargo():
         return "\n".join(sorted(packages)) if packages else None
     return None
 
-# ---- Main ----
-def main():
-    os_name = get_os()
-    output_file = Path("pkgs.md")
+# ─── Lista completa de gestores (nombre, función, sistema operativo) ───────
+MANAGERS = [
+    # Linux
+    ("APT (dpkg)", linux_apt, "linux"),
+    ("PPAs (repositorios)", linux_apt_ppas, "linux"),
+    ("Snap", linux_snap, "linux"),
+    ("Flatpak", linux_flatpak, "linux"),
+    ("Pacman (Arch)", linux_pacman, "linux"),
+    ("DNF (Fedora/RHEL)", linux_dnf, "linux"),
+    ("YUM (legacy)", linux_yum, "linux"),
+    ("Zypper (OpenSUSE)", linux_zypper, "linux"),
+    ("RPM (genérico)", linux_rpm, "linux"),
+    ("AppImage (escaneo)", linux_appimage, "linux"),
+    ("GNU Stow", linux_gnu_stow, "linux"),
+    # macOS
+    ("Homebrew", macos_brew, "macos"),
+    ("MacPorts", macos_macports, "macos"),
+    ("pkgutil (.pkg)", macos_pkgutil, "macos"),
+    ("Mac App Store (mas)", macos_mas, "macos"),
+    ("LaunchAgents/LaunchDaemons", macos_launchctl, "macos"),
+    ("Aplicaciones .app", macos_system_profiler, "macos"),
+    # Windows
+    ("winget", windows_winget, "windows"),
+    ("Chocolatey", windows_chocolatey, "windows"),
+    ("Scoop", windows_scoop, "windows"),
+    ("Registro Windows (MSI/EXE)", windows_registry, "windows"),
+    ("WSL distribuciones", windows_wsl, "windows"),
+    ("Extensiones VS Code", windows_vscode_extensions, "windows"),
+    ("Módulos PowerShell", windows_powershell_modules, "windows"),
+    ("Características Windows", windows_features, "windows"),
+    # Multiplataforma
+    ("asdf", generic_asdf, "common"),
+    ("Nix", generic_nix, "common"),
+    ("Guix", generic_guix, "common"),
+    ("pip (Python)", generic_pip, "common"),
+    ("npm (Node.js global)", generic_npm, "common"),
+    ("gem (Ruby)", generic_gem, "common"),
+    ("cargo (Rust)", generic_cargo, "common"),
+]
 
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write("# 📦 Lista completa de paquetes instalados\n\n")
-        f.write(f"**Sistema operativo:** {platform.system()} {platform.release()}\n")
-        if os_name == 'windows':
-            date_cmd = 'date /t'
+# ─── Funciones de escritura (múltiples formatos) ───────────────────────────
+def write_output_md(results, metadata, stats, output_file="packages.md"):
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write("# 📦 Lista de paquetes instalados\n\n")
+        f.write(f"**Generado:** {metadata['generated']}  \n")
+        f.write(f"**Sistema:** {metadata['system']}  \n")
+        f.write(f"**Usuario:** {metadata['user']}  \n")
+        f.write(f"**Directorio:** {metadata['cwd']}  \n\n")
+        f.write("## 📊 Estadísticas\n\n")
+        f.write(f"- **Total de gestores:** {stats['total_managers']}\n")
+        f.write(f"- **Total de paquetes (estimado):** {stats['total_packages']}\n\n")
+        f.write("## 📦 Paquetes por gestor\n\n")
+        for mgr_name, content in results:
+            if content is None:
+                continue
+            f.write(f"### {mgr_name}\n\n")
+            f.write("```\n")
+            # Limitar a 1M caracteres por gestor (por si acaso)
+            f.write(content[:1000000])
+            f.write("\n```\n\n")
+        f.write("---\n")
+        f.write("> ℹ️ Nota: Algunos gestores pueden requerir privilegios de administrador.\n")
+    return output_file
+
+def write_output_json(results, metadata, stats, output_file="packages.json"):
+    data = {
+        "metadata": metadata,
+        "stats": stats,
+        "packages": {mgr: content if content else None for mgr, content in results}
+    }
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    return output_file
+
+def write_output_xml(results, metadata, stats, output_file="packages.xml"):
+    import xml.etree.ElementTree as ET
+    root = ET.Element("packages")
+    meta = ET.SubElement(root, "metadata")
+    for k, v in metadata.items():
+        elem = ET.SubElement(meta, k)
+        elem.text = str(v)
+    stats_elem = ET.SubElement(root, "statistics")
+    for k, v in stats.items():
+        elem = ET.SubElement(stats_elem, k)
+        elem.text = str(v)
+    for mgr_name, content in results:
+        mgr_elem = ET.SubElement(root, "manager", name=mgr_name)
+        if content:
+            mgr_elem.text = content
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ")
+    tree.write(output_file, encoding='utf-8', xml_declaration=True)
+    return output_file
+
+def write_output_txt(results, metadata, stats, output_file="packages.txt"):
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(f"LISTA DE PAQUETES INSTALADOS\n")
+        f.write(f"Generado: {metadata['generated']}\n")
+        f.write(f"Sistema: {metadata['system']}\n")
+        f.write(f"Usuario: {metadata['user']}\n")
+        f.write(f"Directorio: {metadata['cwd']}\n\n")
+        f.write(f"Total de gestores: {stats['total_managers']}\n")
+        f.write(f"Total de paquetes (estimado): {stats['total_packages']}\n\n")
+        for mgr_name, content in results:
+            if content is None:
+                continue
+            f.write(f"=== {mgr_name} ===\n")
+            f.write(content)
+            f.write("\n\n")
+    return output_file
+
+def write_output_stats(results, metadata, stats, output_file="packages_stats.json"):
+    # Solo guarda estadísticas
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump({"metadata": metadata, "stats": stats}, f, indent=2)
+    return output_file
+
+# ─── Cálculo de estadísticas ───────────────────────────────────────────────
+def compute_stats(results):
+    total_packages = 0
+    mgr_count = 0
+    for mgr, content in results:
+        if content and content.strip():
+            mgr_count += 1
+            # Estimación: contar líneas no vacías como paquetes (aproximado)
+            total_packages += len([l for l in content.splitlines() if l.strip()])
+    return {
+        "total_managers": mgr_count,
+        "total_packages": total_packages,
+    }
+
+# ─── Interfaz de usuario: argumentos CLI e interactivo ─────────────────────
+def parse_args():
+    parser = argparse.ArgumentParser(description="Lista paquetes instalados en múltiples formatos")
+    parser.add_argument("--format", "-f", choices=["md", "json", "xml", "txt", "stats"], default=None,
+                        help="Formato de salida")
+    parser.add_argument("--output", "-o", help="Archivo de salida (sin extensión, se añade automáticamente)")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Modo silencioso (sin preguntas)")
+    parser.add_argument("--profile", "-p", help="Cargar perfil desde archivo (por defecto .pkg_profile.json)")
+    parser.add_argument("--save-profile", action="store_true", help="Guardar configuración como perfil")
+    parser.add_argument("--include-manager", nargs="+", help="Solo estos gestores (nombres exactos)")
+    parser.add_argument("--exclude-manager", nargs="+", help="Excluir estos gestores")
+    parser.add_argument("--no-parallel", action="store_true", help="Deshabilitar ejecución paralela")
+    return parser.parse_args()
+
+def interactive_selection():
+    print(colored("\n=== Listado de paquetes instalados - Modo interactivo ===", Colors.HEADER))
+    print("Selecciona los gestores que quieres consultar (pueden tardar unos segundos):")
+    current_os = get_os()
+    available = []
+    for name, func, os_type in MANAGERS:
+        if os_type == "common" or os_type == current_os:
+            available.append(name)
+    for i, name in enumerate(available, 1):
+        print(f"{i:2d}. {name}")
+    print("\nOpciones: 'all', 'none', o números separados por comas (ej. 1,3,5)")
+    while True:
+        sel = input(colored("Tu selección: ", Colors.CYAN)).strip().lower()
+        if sel == 'all':
+            selected = available
+            break
+        elif sel == 'none':
+            selected = []
+            break
         else:
-            date_cmd = 'date'
-        f.write(f"**Generado el:** {subprocess.getoutput(date_cmd)}\n\n")
-        f.write("---\n\n")
+            try:
+                idxs = [int(x.strip()) for x in sel.split(',')]
+                selected = [available[i-1] for i in idxs if 1 <= i <= len(available)]
+                if selected:
+                    break
+                else:
+                    print(colored("Selección vacía o inválida.", Colors.WARNING))
+            except ValueError:
+                print(colored("Entrada no válida.", Colors.WARNING))
+    print("\nFormatos disponibles: md, json, xml, txt, stats")
+    fmt = input(colored("Formato de salida [md]: ", Colors.CYAN)).strip().lower() or "md"
+    if fmt not in ("md","json","xml","txt","stats"):
+        fmt = "md"
+    out_base = input(colored("Nombre base del archivo (sin extensión) [packages]: ", Colors.CYAN)).strip() or "packages"
+    parallel = input(colored("¿Ejecutar en paralelo? (s/n) [s]: ", Colors.CYAN)).strip().lower() != "n"
+    save = input(colored("¿Guardar este perfil? (s/n) [n]: ", Colors.CYAN)).strip().lower() == "s"
+    return {
+        "selected_managers": selected,
+        "format": fmt,
+        "output_base": out_base,
+        "parallel": parallel,
+        "save_profile": save
+    }
 
-        # SECCIONES POR SO
-        if os_name == 'linux':
-            f.write("## 🐧 Linux (gestores nativos)\n\n")
-            write_section(f, "APT (dpkg)", linux_apt())
-            write_section(f, "PPAs (repositorios)", linux_apt_ppas())
-            write_section(f, "Snap", linux_snap())
-            write_section(f, "Flatpak", linux_flatpak())
-            write_section(f, "Pacman (Arch)", linux_pacman())
-            write_section(f, "DNF (Fedora/RHEL)", linux_dnf())
-            write_section(f, "YUM (legacy)", linux_yum())
-            write_section(f, "Zypper (OpenSUSE)", linux_zypper())
-            write_section(f, "RPM (genérico)", linux_rpm())
-            write_section(f, "AppImage", linux_appimage())
-            write_section(f, "GNU Stow", linux_gnu_stow())
+def load_profile(profile_path=".pkg_profile.json"):
+    if os.path.isfile(profile_path):
+        try:
+            with open(profile_path, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return None
 
-        elif os_name == 'macos':
-            f.write("## 🍎 macOS (gestores nativos)\n\n")
-            write_section(f, "Homebrew", macos_brew())
-            write_section(f, "MacPorts", macos_macports())
-            write_section(f, "pkgutil (.pkg)", macos_pkgutil())
-            write_section(f, "Mac App Store (mas)", macos_mas())
-            write_section(f, "LaunchAgents/LaunchDaemons (usuario)", macos_launchctl())
-            write_section(f, "Aplicaciones .app (system_profiler)", macos_system_profiler())
+def save_profile(profile, profile_path=".pkg_profile.json"):
+    try:
+        with open(profile_path, 'w') as f:
+            json.dump(profile, f, indent=2)
+        logger.info(colored(f"Perfil guardado en {profile_path}", Colors.GREEN))
+    except Exception as e:
+        logger.warning(f"No se pudo guardar perfil: {e}")
 
-        elif os_name == 'windows':
-            f.write("## 🪟 Windows (gestores nativos)\n\n")
-            write_section(f, "winget", windows_winget())
-            write_section(f, "Chocolatey", windows_chocolatey())
-            write_section(f, "Scoop", windows_scoop())
-            write_section(f, "Programas del registro (MSI/EXE)", windows_registry(), code_block=False)
-            write_section(f, "WSL (distribuciones)", windows_wsl())
-            write_section(f, "Extensiones de VS Code", windows_vscode_extensions())
-            write_section(f, "Módulos de PowerShell (instalados)", windows_powershell_modules())
-            write_section(f, "Características de Windows (activadas)", windows_features())
+# ─── Main ──────────────────────────────────────────────────────────────────
+def main():
+    args = parse_args()
+    profile = None
+    if args.profile:
+        profile = load_profile(args.profile)
+    elif not args.quiet and not args.format:
+        # Modo interactivo
+        profile = interactive_selection()
+    else:
+        # Modo CLI puro
+        profile = {}
+        current_os = get_os()
+        all_managers = [name for name, func, os_type in MANAGERS if os_type == "common" or os_type == current_os]
+        if args.include_manager:
+            profile["selected_managers"] = [m for m in all_managers if m in args.include_manager]
+        else:
+            profile["selected_managers"] = all_managers
+        if args.exclude_manager:
+            profile["selected_managers"] = [m for m in profile["selected_managers"] if m not in args.exclude_manager]
+        profile["format"] = args.format or "md"
+        profile["output_base"] = args.output or "packages"
+        profile["parallel"] = not args.no_parallel
+        profile["save_profile"] = args.save_profile
 
-        # SECCIÓN MULTIPLATAFORMA (común a todos los SO)
-        f.write("\n## 🌐 Gestores multiplataforma\n\n")
-        write_section(f, "asdf (version manager)", generic_asdf())
-        write_section(f, "Nix (nix-env / profile)", generic_nix())
-        write_section(f, "Guix", generic_guix())
-        write_section(f, "pip (Python)", generic_pip())
-        write_section(f, "npm (Node.js global)", generic_npm())
-        write_section(f, "gem (Ruby)", generic_gem())
-        write_section(f, "cargo (Rust)", generic_cargo())
+    if not profile.get("selected_managers"):
+        logger.error("No se seleccionó ningún gestor. Saliendo.")
+        return
 
-        f.write("\n---\n")
-        f.write("> ℹ️ **Nota:** Se han listado los paquetes de decenas de gestores.\n")
-        f.write("> Algunos comandos requieren permisos de administrador para mostrarse completamente.\n")
-        f.write("> Los paquetes pueden aparecer duplicados si están gestionados por múltiples herramientas.\n")
+    # Preparar lista de gestores a ejecutar
+    managers_to_run = []
+    for name, func, os_type in MANAGERS:
+        if name in profile["selected_managers"]:
+            managers_to_run.append((name, func))
 
-    print(f"✅ Listado guardado en: {output_file.absolute()}")
+    logger.info(colored(f"Consultando {len(managers_to_run)} gestores...", Colors.CYAN))
 
-if __name__ == "__main__":
+    # Ejecutar en paralelo o secuencial
+    results = []
+    if profile["parallel"] and len(managers_to_run) > 1:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_mgr = {executor.submit(func): name for name, func in managers_to_run}
+            if HAS_TQDM:
+                pbar = tqdm(total=len(managers_to_run), desc="Consultando gestores", unit="gestor")
+            for future in as_completed(future_to_mgr):
+                name = future_to_mgr[future]
+                content = future.result()
+                results.append((name, content))
+                if HAS_TQDM:
+                    pbar.update(1)
+            if HAS_TQDM:
+                pbar.close()
+    else:
+        for name, func in managers_to_run:
+            logger.debug(f"Ejecutando {name}...")
+            content = func()
+            results.append((name, content))
+
+    # Estadísticas
+    stats = compute_stats(results)
+
+    # Metadatos
+    metadata = {
+        "generated": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "system": platform.platform(),
+        "user": getpass.getuser(),
+        "cwd": os.getcwd(),
+        "python_version": sys.version
+    }
+
+    # Generar archivo de salida
+    fmt = profile["format"]
+    out_base = profile["output_base"]
+    out_file = None
+    if fmt == "md":
+        out_file = write_output_md(results, metadata, stats, f"{out_base}.md")
+    elif fmt == "json":
+        out_file = write_output_json(results, metadata, stats, f"{out_base}.json")
+    elif fmt == "xml":
+        out_file = write_output_xml(results, metadata, stats, f"{out_base}.xml")
+    elif fmt == "txt":
+        out_file = write_output_txt(results, metadata, stats, f"{out_base}.txt")
+    elif fmt == "stats":
+        out_file = write_output_stats(results, metadata, stats, f"{out_base}_stats.json")
+    else:
+        out_file = write_output_md(results, metadata, stats, "packages.md")
+
+    logger.info(colored(f"✅ Archivo generado: {out_file}", Colors.GREEN))
+
+    # Guardar perfil si se pidió
+    if profile.get("save_profile"):
+        save_profile({
+            "selected_managers": profile["selected_managers"],
+            "format": fmt,
+            "output_base": out_base,
+            "parallel": profile["parallel"]
+        })
+
+    # Resumen
+    print(colored("\n=== RESUMEN ===", Colors.BOLD))
+    print(f"Gestores consultados: {len([r for r in results if r[1] is not None])}/{len(results)}")
+    print(f"Total paquetes estimado: {stats['total_packages']}")
+    print(f"Salida: {out_file}")
+
+if __name__ == '__main__':
     main()
