@@ -64,7 +64,7 @@ def colored(text, color):
 # ─── Configuración de logging ──────────────────────────────────────────────
 logger = logging.getLogger('context_generator')
 logger.setLevel(logging.DEBUG)
-fh = logging.FileHandler('context.log', encoding='utf-8')
+fh = logging.FileHandler(str(get_log_path(__file__)), encoding='utf-8')
 fh.setLevel(logging.DEBUG)
 fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 ch = logging.StreamHandler()
@@ -145,7 +145,7 @@ def detect_encoding(filepath):
     return enc
 
 # ─── Gestión de .contextignore ────────────────────────────────────────────
-CONTEXTIGNORE_FILE = '.contextignore'
+CONTEXTIGNORE_FILE = str(get_global_profile_path(__file__, ".contextignore"))
 
 def load_contextignore(start_path='.'):
     """Lee el .contextignore o lo crea con los directorios ignorados por defecto."""
@@ -564,7 +564,7 @@ def load_profile():
     if os.path.isfile('.context_profile.json'):
         if input(colored("¿Cargar perfil anterior? (s/n) [s]: ", Colors.CYAN)).strip().lower() not in ('n','no'):
             try:
-                with open('.context_profile.json', 'r') as f:
+                with open(get_global_profile_path(__file__, ".context_profile.json"), "r") as f:
                     return json.load(f)
             except:
                 pass
@@ -572,7 +572,7 @@ def load_profile():
 
 def save_profile(profile):
     try:
-        with open('.context_profile.json', 'w') as f:
+        with open(get_global_profile_path(__file__, ".context_profile.json"), "w") as f:
             json.dump(profile, f, indent=2)
         print(colored("Perfil guardado.", Colors.GREEN))
     except Exception as e:
@@ -815,7 +815,7 @@ def main():
             'extensions': selected_extensions,
             'stats': stats
         }
-        with open('context_stats.json', 'w', encoding='utf-8') as f:
+        with open(str(get_instance_dir(__file__) / "context_stats.json"), "w", encoding='utf-8') as f:
             json.dump(stats_output, f, indent=2, ensure_ascii=False)
         print(colored("\nEstadísticas exportadas a context_stats.json", Colors.GREEN))
         return
