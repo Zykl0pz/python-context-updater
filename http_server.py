@@ -20,7 +20,7 @@ HOST = "0.0.0.0"
 PORT = 8080
 BASE_DIR = Path.cwd().resolve()  # Directorio raíz donde se ejecuta el script
 
-# ─── Plantilla HTML con preview y persistencia ─────────────────────
+# ─── Plantilla HTML con preview por botón y persistencia ───────────
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -36,6 +36,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             --color-btn-active: #3498db;
             --color-download: #2ecc71;
             --color-download-hover: #27ae60;
+            --color-preview: #3498db;
+            --color-preview-hover: #2980b9;
             --shadow: 0 2px 5px rgba(0,0,0,0.1);
             --radius: 8px;
             --gap: clamp(0.5rem, 2vw, 1rem);
@@ -153,31 +155,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin-bottom: 0.5rem;
             flex: 1;
         }
-        /* Enlace de nombre: para carpetas se comporta normal; para archivos abre preview */
-        .name a, .name span {
-            cursor: pointer;
-            color: var(--color-link);
-            text-decoration: none;
+        .card-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            justify-content: center;
+            margin-top: 0.5rem;
         }
-        .name a:hover, .name span:hover {
-            text-decoration: underline;
-        }
-        .download-btn {
-            background: var(--color-download);
-            color: white;
+        .download-btn, .preview-btn {
             padding: 0.4em 0.8em;
             border-radius: var(--radius);
             text-decoration: none;
             font-size: var(--font-size-small);
             border: none;
             cursor: pointer;
-            display: inline-block;
-            margin-top: auto;
             white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.2em;
         }
-        .download-btn:hover, .download-btn:active {
-            background: var(--color-download-hover);
+        .download-btn {
+            background: var(--color-download);
+            color: white;
         }
+        .download-btn:hover { background: var(--color-download-hover); }
+        .preview-btn {
+            background: var(--color-preview);
+            color: white;
+        }
+        .preview-btn:hover { background: var(--color-preview-hover); }
 
         .list-view {
             padding: var(--gap);
@@ -359,7 +365,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div id="list-view" class="list-view" style="display:none">
         <table>
             <thead>
-                <tr><th>Nombre</th><th>Tamaño</th><th>Modificado</th><th>Descargar</th></tr>
+                <tr><th>Nombre</th><th>Tamaño</th><th>Modificado</th><th>Descargar</th><th>Vista previa</th></tr>
             </thead>
             <tbody id="list-tbody"></tbody>
         </table>
@@ -431,23 +437,30 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 } else {
                     iconHtml = '<div class="icon">' + item.icon + '</div>';
                 }
+
                 let nameHtml;
                 if (item.type === 'directory') {
                     nameHtml = '<a href="' + item.path + '/">' + item.name + '/</a>';
                 } else {
-                    // Archivo: abre preview con atributos data
-                    nameHtml = `<span data-preview="file" data-path="${item.path}" data-mime="${item.mime}" data-name="${item.name}">${item.name}</span>`;
+                    nameHtml = '<span>' + item.name + '</span>';
                 }
-                let downloadBtn = '';
+
+                let actionsHtml = '';
                 if (item.type === 'file') {
-                    downloadBtn = `<a class="download-btn" href="${item.path}" data-download="file" data-filename="${item.name}">⬇️ Descargar</a>`;
-                } else {
-                    downloadBtn = `<a class="download-btn" href="${item.path}?download=zip" data-download="directory" data-filename="${item.name}">⬇️ Descargar</a>`;
+                    actionsHtml = `<div class="card-actions">
+                        <a class="download-btn" href="${item.path}" data-download="file" data-filename="${item.name}">⬇️ Descargar</a>
+                        <button class="preview-btn" data-path="${item.path}" data-mime="${item.mime}" data-name="${item.name}">🔍 Vista previa</button>
+                    </div>`;
+                } else if (item.type === 'directory') {
+                    actionsHtml = `<div class="card-actions">
+                        <a class="download-btn" href="${item.path}?download=zip" data-download="directory" data-filename="${item.name}">⬇️ Descargar</a>
+                    </div>`;
                 }
+
                 return `<div class="card">
                     ${iconHtml}
                     <div class="name">${nameHtml}</div>
-                    ${downloadBtn}
+                    ${actionsHtml}
                 </div>`;
             }).join('');
 
@@ -460,20 +473,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (item.type === 'directory') {
                     nameHtml = '<a href="' + item.path + '/">' + item.name + '/</a>';
                 } else {
-                    nameHtml = `<span data-preview="file" data-path="${item.path}" data-mime="${item.mime}" data-name="${item.name}">${item.name}</span>`;
+                    nameHtml = '<span>' + item.name + '</span>';
                 }
                 let sizeCell = item.type === 'directory' ? '-' : item.size_human;
-                let downloadBtn = '';
+                let downloadCell = '';
+                let previewCell = '';
                 if (item.type === 'file') {
-                    downloadBtn = `<a class="download-btn" href="${item.path}" data-download="file" data-filename="${item.name}">⬇️ Descargar</a>`;
-                } else {
-                    downloadBtn = `<a class="download-btn" href="${item.path}?download=zip" data-download="directory" data-filename="${item.name}">⬇️ Descargar</a>`;
+                    downloadCell = `<a class="download-btn" href="${item.path}" data-download="file" data-filename="${item.name}">⬇️ Descargar</a>`;
+                    previewCell = `<button class="preview-btn" data-path="${item.path}" data-mime="${item.mime}" data-name="${item.name}">🔍 Vista previa</button>`;
+                } else if (item.type === 'directory') {
+                    downloadCell = `<a class="download-btn" href="${item.path}?download=zip" data-download="directory" data-filename="${item.name}">⬇️ Descargar</a>`;
+                    previewCell = '-';
                 }
                 return `<tr>
                     <td>${iconCell} ${nameHtml}</td>
                     <td>${sizeCell}</td>
                     <td>${item.mtime}</td>
-                    <td>${downloadBtn}</td>
+                    <td>${downloadCell}</td>
+                    <td>${previewCell}</td>
                 </tr>`;
             }).join('');
         }
@@ -486,7 +503,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             saveViewMode(view);
         }
 
-        // Preview handling
+        // Preview con fetch, ahora usando rutas ya codificadas
         async function openPreview(filePath, mimeType, fileName) {
             previewTitle.textContent = fileName;
             previewContent.innerHTML = '<p class="preview-message">Cargando...</p>';
@@ -523,7 +540,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         function closePreview() {
             previewModal.classList.remove('active');
-            // Limpiar cualquier URL creada
             previewContent.innerHTML = '';
         }
 
@@ -533,26 +549,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             return div.innerHTML;
         }
 
-        // Eventos delegados para preview y descargas
+        // Delegación de eventos: preview y descargas
         document.addEventListener('click', function(e) {
-            // Preview al hacer clic en el nombre de un archivo
-            const previewTrigger = e.target.closest('span[data-preview="file"]');
-            if (previewTrigger) {
+            // Preview por botón específico
+            const previewBtn = e.target.closest('.preview-btn');
+            if (previewBtn) {
                 e.preventDefault();
-                const path = previewTrigger.dataset.path;
-                const mime = previewTrigger.dataset.mime;
-                const name = previewTrigger.dataset.name;
+                const path = previewBtn.dataset.path;
+                const mime = previewBtn.dataset.mime;
+                const name = previewBtn.dataset.name;
                 openPreview(path, mime, name);
                 return;
             }
 
             // Descargas con confirmación
-            const downloadTrigger = e.target.closest('.download-btn');
-            if (downloadTrigger) {
+            const downloadBtn = e.target.closest('.download-btn');
+            if (downloadBtn) {
                 e.preventDefault();
-                const downloadType = downloadTrigger.dataset.download;
-                const fileName = downloadTrigger.dataset.filename;
-                const url = downloadTrigger.getAttribute('href');
+                const downloadType = downloadBtn.dataset.download;
+                const fileName = downloadBtn.dataset.filename;
+                const url = downloadBtn.getAttribute('href');
                 let message = `¿Descargar "${fileName}"?`;
                 if (downloadType === 'directory') {
                     message += ' Se generará un archivo .zip con todo el contenido.';
@@ -563,7 +579,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         });
 
-        // Eventos del modal de confirmación
+        // Modal de confirmación
         confirmBtn.addEventListener('click', () => {
             if (!pendingDownload) return;
             const { url, downloadType, fileName } = pendingDownload;
@@ -590,7 +606,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             pendingDownload = null;
         }
 
-        // Cerrar preview con clic fuera del contenido
+        // Cerrar preview con clic fuera
         previewModal.addEventListener('click', function(e) {
             if (e.target === previewModal) closePreview();
         });
@@ -658,19 +674,21 @@ def generate_directory_data(relative_path):
             continue
         is_dir = full.is_dir()
         rel = str(full.relative_to(BASE_DIR)).replace('\\', '/')
+        # Codificar la ruta para URL (los espacios y caracteres especiales se convierten)
+        rel_quoted = urllib.parse.quote(rel, safe='/')
         mime_type, _ = mimetypes.guess_type(str(full))
         if mime_type is None:
             mime_type = 'application/octet-stream'
         item = {
             'name': name,
-            'path': '/' + rel,
+            'path': '/' + rel_quoted,   # ruta lista para usar en URLs
             'type': 'directory' if is_dir else 'file',
             'size': stat.st_size,
             'size_human': '-' if is_dir else human_readable_size(stat.st_size),
             'mtime': format_time(stat.st_mtime),
             'icon': get_icon_for_file(name),
             'is_image': not is_dir and is_image_file(name),
-            'mime': mime_type  # Nuevo campo
+            'mime': mime_type
         }
         items.append(item)
     return items
