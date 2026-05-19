@@ -25,36 +25,198 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Servidor de archivos</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #333; }
-        .header { background: #2c3e50; color: white; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
-        .header h1 { font-size: 1.2rem; }
-        .breadcrumb { margin: 0.5rem 1rem; font-size: 0.9rem; }
-        .breadcrumb a { color: #3498db; text-decoration: none; }
-        .breadcrumb a:hover { text-decoration: underline; }
-        .controls { padding: 0.5rem 1rem; display: flex; gap: 1rem; align-items: center; }
-        .view-btn { background: #ecf0f1; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
-        .view-btn.active { background: #3498db; color: white; }
-        .grid-view { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; padding: 1rem; }
-        .list-view { display: none; padding: 1rem; }
-        .card { background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); padding: 1rem; text-align: center; }
-        .card img, .card .icon { width: 80px; height: 80px; object-fit: cover; display: block; margin: 0 auto 0.5rem; }
-        .card .icon { font-size: 3rem; line-height: 80px; color: #7f8c8d; }
-        .card .name { font-size: 0.85rem; word-break: break-word; margin-bottom: 0.5rem; }
-        .download-btn { display: inline-block; background: #2ecc71; color: white; padding: 0.3rem 0.8rem; border-radius: 4px; text-decoration: none; font-size: 0.8rem; margin-top: 0.5rem; cursor: pointer; border: none; }
-        .download-btn:hover { background: #27ae60; }
-        table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        th, td { padding: 0.6rem; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background: #ecf0f1; }
-        .detail-icon { font-size: 1.5rem; margin-right: 0.5rem; vertical-align: middle; }
-        .detail-img { width: 32px; height: 32px; object-fit: cover; vertical-align: middle; margin-right: 0.5rem; }
-        @media (max-width: 600px) {
-            .grid-view { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+        :root {
+            --color-bg: #f5f5f5;
+            --color-text: #333;
+            --color-primary: #2c3e50;
+            --color-link: #3498db;
+            --color-btn-active: #3498db;
+            --color-download: #2ecc71;
+            --color-download-hover: #27ae60;
+            --shadow: 0 2px 5px rgba(0,0,0,0.1);
+            --radius: 8px;
+            --gap: clamp(0.5rem, 2vw, 1rem);
+            --font-size-base: clamp(0.875rem, 2.5vw, 1rem);
+            --font-size-small: clamp(0.75rem, 2vw, 0.85rem);
+            --font-size-title: clamp(1rem, 3vw, 1.3rem);
         }
-        /* Modal de confirmación */
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: var(--color-bg);
+            color: var(--color-text);
+            font-size: var(--font-size-base);
+            line-height: 1.4;
+            -webkit-text-size-adjust: 100%;
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        /* Header */
+        .header {
+            background: var(--color-primary);
+            color: white;
+            padding: var(--gap);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .header h1 {
+            font-size: var(--font-size-title);
+            white-space: nowrap;
+        }
+
+        /* Breadcrumb */
+        .breadcrumb {
+            font-size: var(--font-size-small);
+            opacity: 0.9;
+            overflow-x: auto;
+            white-space: nowrap;
+            -webkit-overflow-scrolling: touch;
+            padding: 0.25rem 0;
+        }
+        .breadcrumb a {
+            color: white;
+            text-decoration: underline;
+        }
+        .breadcrumb a:hover { opacity: 0.8; }
+
+        /* Controls */
+        .controls {
+            padding: 0.75rem var(--gap);
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--gap);
+            align-items: center;
+            background: white;
+            border-bottom: 1px solid #ddd;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .view-btn {
+            background: #ecf0f1;
+            border: none;
+            padding: 0.6rem 1.2rem;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: var(--font-size-base);
+            white-space: nowrap;
+            flex: 1 1 auto;
+            min-width: 100px;
+            text-align: center;
+            transition: background 0.2s, color 0.2s;
+        }
+        .view-btn.active {
+            background: var(--color-btn-active);
+            color: white;
+        }
+
+        /* Grid view */
+        .grid-view {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax( clamp(110px, 25vw, 200px), 1fr ));
+            gap: var(--gap);
+            padding: var(--gap);
+        }
+        .card {
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: var(--gap);
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .card img, .card .icon {
+            width: clamp(50px, 15vw, 80px);
+            height: clamp(50px, 15vw, 80px);
+            object-fit: cover;
+            display: block;
+            margin: 0 auto 0.5rem;
+            flex-shrink: 0;
+        }
+        .card .icon {
+            font-size: clamp(2rem, 10vw, 3rem);
+            line-height: 1;
+            color: #7f8c8d;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card .name {
+            font-size: var(--font-size-small);
+            word-break: break-word;
+            margin-bottom: 0.5rem;
+            flex: 1;
+        }
+        .download-btn {
+            background: var(--color-download);
+            color: white;
+            padding: 0.4em 0.8em;
+            border-radius: var(--radius);
+            text-decoration: none;
+            font-size: var(--font-size-small);
+            border: none;
+            cursor: pointer;
+            display: inline-block;
+            margin-top: auto;
+            white-space: nowrap;
+        }
+        .download-btn:hover, .download-btn:active {
+            background: var(--color-download-hover);
+        }
+
+        /* List / Detalles */
+        .list-view {
+            padding: var(--gap);
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        .list-view table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            box-shadow: var(--shadow);
+            min-width: 550px; /* Previene que la tabla se encoja demasiado */
+        }
+        th, td {
+            padding: 0.6rem;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+            font-size: var(--font-size-small);
+        }
+        th {
+            background: #ecf0f1;
+            white-space: nowrap;
+            font-weight: 600;
+        }
+        .detail-icon {
+            font-size: 1.5rem;
+            vertical-align: middle;
+            margin-right: 0.5rem;
+        }
+        .detail-img {
+            width: 28px;
+            height: 28px;
+            object-fit: cover;
+            vertical-align: middle;
+            margin-right: 0.5rem;
+            border-radius: 4px;
+        }
+        td:first-child {
+            max-width: 200px;
+            word-break: break-word;
+        }
+
+        /* Modal */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -63,30 +225,75 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             z-index: 1000;
             justify-content: center;
             align-items: center;
+            padding: 1rem;
         }
         .modal-overlay.active { display: flex; }
         .modal {
             background: white;
-            padding: 2rem;
-            border-radius: 8px;
-            max-width: 400px;
-            width: 90%;
+            padding: 2rem 1.5rem;
+            border-radius: var(--radius);
+            width: min(90vw, 400px);
             text-align: center;
             box-shadow: 0 10px 25px rgba(0,0,0,0.3);
         }
-        .modal p { margin-bottom: 1.5rem; font-size: 1.1rem; }
-        .modal-buttons { display: flex; gap: 1rem; justify-content: center; }
-        .modal-buttons button {
-            padding: 0.6rem 1.5rem;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 1rem;
+        .modal p {
+            margin-bottom: 1.5rem;
+            font-size: var(--font-size-base);
         }
-        .confirm-btn { background: #2ecc71; color: white; }
-        .confirm-btn:hover { background: #27ae60; }
+        .modal-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .modal-buttons button {
+            padding: 0.7rem 1.5rem;
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: var(--font-size-base);
+            flex: 1 1 auto;
+            min-width: 100px;
+        }
+        .confirm-btn { background: var(--color-download); color: white; }
+        .confirm-btn:hover { background: var(--color-download-hover); }
         .cancel-btn { background: #e74c3c; color: white; }
         .cancel-btn:hover { background: #c0392b; }
+
+        /* Ajustes específicos para pantallas muy pequeñas */
+        @media (max-width: 480px) {
+            .header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .controls {
+                justify-content: center;
+            }
+            .grid-view {
+                grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+            }
+            .card .icon {
+                font-size: 2.5rem;
+            }
+        }
+
+        /* Ajustes para pantallas grandes (escritorio) */
+        @media (min-width: 1024px) {
+            .grid-view {
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            }
+            .controls {
+                padding-left: 2rem;
+                padding-right: 2rem;
+            }
+            .list-view {
+                padding-left: 2rem;
+                padding-right: 2rem;
+            }
+            .breadcrumb {
+                font-size: var(--font-size-base);
+            }
+        }
     </style>
 </head>
 <body>
@@ -99,7 +306,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <button id="list-btn" class="view-btn" onclick="switchView('list')">📋 Detalles</button>
     </div>
     <div id="grid-view" class="grid-view"></div>
-    <div id="list-view" class="list-view">
+    <div id="list-view" class="list-view" style="display:none">
         <table>
             <thead>
                 <tr><th>Nombre</th><th>Tamaño</th><th>Modificado</th><th>Descargar</th></tr>
@@ -108,7 +315,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </table>
     </div>
 
-    <!-- Modal de confirmación de descarga -->
+    <!-- Modal de confirmación -->
     <div id="confirm-modal" class="modal-overlay">
         <div class="modal">
             <p id="modal-message">¿Descargar este elemento?</p>
@@ -123,15 +330,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const DATA = __DATA_PLACEHOLDER__;
         const CURRENT_PATH = __PATH_PLACEHOLDER__;
 
-        // Referencias al modal
         const modal = document.getElementById('confirm-modal');
         const modalMessage = document.getElementById('modal-message');
         const confirmBtn = document.getElementById('modal-confirm');
         const cancelBtn = document.getElementById('modal-cancel');
-        let pendingDownload = null; // { url, isDirectory, fileName }
+        let pendingDownload = null;
 
         function render() {
-            // Ruta actual (migas de pan)
             const breadcrumb = document.getElementById('path-display');
             const parts = CURRENT_PATH.split('/').filter(p => p);
             let html = '<a href="/">Inicio</a>';
@@ -142,7 +347,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             });
             breadcrumb.innerHTML = html || '/';
 
-            // Vista de miniaturas
             const grid = document.getElementById('grid-view');
             grid.innerHTML = DATA.map(item => {
                 let iconHtml = '';
@@ -156,7 +360,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 let nameLink = item.type === 'directory'
                     ? '<a href="' + item.path + '/">' + item.name + '/</a>'
                     : '<span>' + item.name + '</span>';
-                // Botón de descarga: archivos -> path directo; directorios -> path?download=zip
                 let downloadBtn = '';
                 if (item.type === 'file') {
                     downloadBtn = `<a class="download-btn" href="${item.path}" data-download="file" data-filename="${item.name}">⬇️ Descargar</a>`;
@@ -170,7 +373,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 </div>`;
             }).join('');
 
-            // Vista de detalles
             const tbody = document.getElementById('list-tbody');
             tbody.innerHTML = DATA.map(item => {
                 let iconCell = item.type === 'directory'
@@ -202,7 +404,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             document.getElementById('list-view').style.display = view === 'list' ? 'block' : 'none';
         }
 
-        // Interceptar clics en botones de descarga (delegación de eventos)
         document.addEventListener('click', function(e) {
             const target = e.target.closest('.download-btn');
             if (!target) return;
@@ -210,7 +411,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const downloadType = target.dataset.download;
             const fileName = target.dataset.filename;
             const url = target.getAttribute('href');
-            // Mostrar modal
             let message = `¿Descargar "${fileName}"?`;
             if (downloadType === 'directory') {
                 message += ' Se generará un archivo .zip con todo el contenido.';
@@ -220,12 +420,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             modal.classList.add('active');
         });
 
-        // Eventos del modal
         confirmBtn.addEventListener('click', () => {
             if (!pendingDownload) return;
             const { url, downloadType, fileName } = pendingDownload;
             if (downloadType === 'file') {
-                // Descarga directa usando un enlace temporal con download
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = fileName;
@@ -233,14 +431,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 a.click();
                 document.body.removeChild(a);
             } else {
-                // Para directorios, navegar a la URL que generará el zip
                 window.location.href = url;
             }
             closeModal();
         });
 
         cancelBtn.addEventListener('click', closeModal);
-        // Cerrar modal al hacer clic fuera del contenido
         modal.addEventListener('click', function(e) {
             if (e.target === modal) closeModal();
         });
@@ -250,9 +446,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             pendingDownload = null;
         }
 
-        // Inicializar
         render();
-        switchView('grid'); // vista por defecto
+        switchView('grid');
     </script>
 </body>
 </html>"""
