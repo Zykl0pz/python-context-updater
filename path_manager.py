@@ -2,7 +2,7 @@
 """
 Gestor de rutas para los scripts del repositorio.
 Todos los archivos generados (logs, perfiles, caché) se guardan en:
-    <repo_dir>/<script_name>/<cwd_path_safe>/
+    <repo_dir>/output/<script_name>/<cwd_path_safe>/
 donde <cwd_path_safe> es el directorio de trabajo actual convertido a una ruta válida.
 """
 
@@ -17,11 +17,14 @@ def get_repo_dir() -> Path:
 def get_script_dir(script_file: str) -> Path:
     """
     Devuelve el directorio específico para un script.
-    Por ejemplo, para 'context.py' devuelve <repo>/context/
+    Ahora dentro de la carpeta 'output' en la raíz del repositorio.
+    Por ejemplo, para 'context.py' devuelve <repo>/output/context/
     """
     repo = get_repo_dir()
     script_name = Path(script_file).stem  # sin extensión
-    return repo / script_name
+    output_dir = repo / "output" / script_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
 
 def get_cwd_safe() -> str:
     """
@@ -39,7 +42,7 @@ def get_cwd_safe() -> str:
 def get_instance_dir(script_file: str) -> Path:
     """
     Devuelve el directorio de instancia para este script y el directorio de trabajo actual.
-    Ejemplo: <repo>/context/<cwd_safe>/
+    Ejemplo: <repo>/output/context/<cwd_safe>/
     """
     script_dir = get_script_dir(script_file)
     instance = script_dir / get_cwd_safe()
@@ -49,7 +52,7 @@ def get_instance_dir(script_file: str) -> Path:
 def get_profile_path(script_file: str, profile_name: str = ".profile.json") -> Path:
     """
     Ruta para un archivo de perfil.
-    Por defecto se guarda en <repo>/<script_name>/<cwd_safe>/<profile_name>.
+    Por defecto se guarda en <repo>/output/<script_name>/<cwd_safe>/<profile_name>.
     Si se desea un perfil global (compartido para todas las ejecuciones), usar get_global_profile_path.
     """
     inst = get_instance_dir(script_file)
@@ -58,7 +61,7 @@ def get_profile_path(script_file: str, profile_name: str = ".profile.json") -> P
 def get_global_profile_path(script_file: str, profile_name: str = ".profile.json") -> Path:
     """
     Ruta para un perfil global (compartido entre todas las ejecuciones).
-    Se guarda en <repo>/<script_name>/global/<profile_name>.
+    Se guarda en <repo>/output/<script_name>/global/<profile_name>.
     """
     script_dir = get_script_dir(script_file)
     global_dir = script_dir / "global"
