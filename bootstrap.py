@@ -3,8 +3,8 @@
 Script de inicio para el repositorio de herramientas.
 - Crea un entorno virtual (venv) en la carpeta del proyecto si no existe.
 - Verifica que todas las dependencias están instaladas dentro del venv.
-- Si faltan, las instala automáticamente desde requirements.txt (o lo genera si no existe).
-- Finalmente, ofrece un menú interactivo para ejecutar los scripts usando el intérprete del venv.
+- Si faltan, las instala automáticamente mostrando progreso y velocidad.
+- Finalmente, ofrece un menú interactivo para ejecutar los scripts.
 """
 
 import os
@@ -13,16 +13,14 @@ import subprocess
 import venv
 import platform
 import json
-import importlib.util
 from pathlib import Path
 from typing import List, Tuple, Optional
 
 # ─── Configuración ─────────────────────────────────────────────────────────
-REPO_DIR = Path(__file__).parent.resolve()  # Directorio donde está este script
+REPO_DIR = Path(__file__).parent.resolve()
 VENV_DIR = REPO_DIR / "venv"
 REQUIREMENTS_FILE = REPO_DIR / "requirements.txt"
 
-# Lista de dependencias principales (se pueden agregar más)
 DEPENDENCIAS = [
     "tqdm",
     "charset-normalizer",
@@ -34,7 +32,6 @@ DEPENDENCIAS = [
     "pdfplumber",
 ]
 
-# Scripts del repositorio que se pueden ejecutar (ruta relativa y nombre para mostrar)
 SCRIPTS = [
     ("context.py", "Generador de contexto de código"),
     ("list_packages.py", "Listado de paquetes instalados"),
@@ -46,21 +43,18 @@ SCRIPTS = [
 
 # ─── Funciones auxiliares ──────────────────────────────────────────────────
 def get_python_exe(venv_dir: Path) -> Path:
-    """Devuelve la ruta al ejecutable de Python dentro del venv."""
     if platform.system() == "Windows":
         return venv_dir / "Scripts" / "python.exe"
     else:
         return venv_dir / "bin" / "python"
 
 def get_pip_exe(venv_dir: Path) -> Path:
-    """Devuelve la ruta al ejecutable de pip dentro del venv."""
     if platform.system() == "Windows":
         return venv_dir / "Scripts" / "pip.exe"
     else:
         return venv_dir / "bin" / "pip"
 
 def create_venv_if_needed():
-    """Crea el entorno virtual si no existe."""
     if not VENV_DIR.exists():
         print(f"📁 Creando entorno virtual en {VENV_DIR}...")
         try:
@@ -73,7 +67,6 @@ def create_venv_if_needed():
         print(f"✓ Entorno virtual ya existe en {VENV_DIR}.")
 
 def ensure_requirements_file():
-    """Genera requirements.txt si no existe, basado en DEPENDENCIAS."""
     if not REQUIREMENTS_FILE.exists():
         print("📄 Generando requirements.txt con las dependencias necesarias...")
         try:
@@ -88,7 +81,7 @@ def ensure_requirements_file():
         print("✓ requirements.txt ya existe.")
 
 def get_installed_packages(venv_dir: Path) -> List[str]:
-    """Devuelve una lista de nombres de paquetes instalados en el venv."""
+    """Devuelve lista de paquetes instalados (nombres en minúscula)."""
     pip = get_pip_exe(venv_dir)
     try:
         result = subprocess.run(
@@ -100,45 +93,52 @@ def get_installed_packages(venv_dir: Path) -> List[str]:
         packages = json.loads(result.stdout)
         return [pkg["name"].lower() for pkg in packages]
     except Exception as e:
-        print(f"⚠️ No se pudo obtener la lista de paquetes instalados: {e}")
+        print(f"⚠️ No se pudo obtener lista de paquetes instalados: {e}")
         return []
 
 def install_missing_dependencies(venv_dir: Path):
-    """Instala las dependencias faltantes usando pip."""
+    """
+    Instala dependencias faltantes mostrando la salida en vivo de pip,
+    que incluye barra de progreso y velocidad de descarga.
+    """
     pip = get_pip_exe(venv_dir)
     installed = get_installed_packages(venv_dir)
     required = [dep.lower() for dep in DEPENDENCIAS]
     missing = [dep for dep in required if dep not in installed]
 
-    if missing:
-        print(f"📦 Instalando dependencias faltantes: {', '.join(missing)}...")
-        try:
-            subprocess.run(
-                [str(pip), "install", "--upgrade", "pip"],  # Actualizar pip primero
-                check=True,
-                capture_output=True,
-            )
-            subprocess.run(
-                [str(pip), "install", "-r", str(REQUIREMENTS_FILE)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            print("✅ Todas las dependencias instaladas correctamente.")
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Error al instalar dependencias: {e}")
-            if e.stderr:
-                print(f"Detalle: {e.stderr}")
-            sys.exit(1)
-    else:
+    if not missing:
         print("✓ Todas las dependencias ya están instaladas.")
+        return
+
+    print(f"\n📦 Instalando {len(missing)} dependencia(s) faltante(s):")
+    for dep in missing:
+        print(f"   - {dep}")
+    print("\n🔄 Se mostrará el progreso de `pip` (incluye velocidad de descarga).\n")
+
+    try:
+        # Actualizar pip dentro del venv (sin capturar salida para ver progreso)
+        print("⬆️  Actualizando pip...")
+        subprocess.run([str(pip), "install", "--upgrade", "pip"], check=True)
+
+        # Instalar dependencias mostrando salida completa (velocímetro incluido)
+        print("\n📥 Instalando dependencias...\n")
+        subprocess.run(
+            [str(pip), "install", "-r", str(REQUIREMENTS_FILE)],
+            check=True,
+            # No capturar stdout/stderr → se ve el progreso en tiempo real
+            stdout=None,
+            stderr=None,
+        )
+        print("\n✅ Todas las dependencias instaladas correctamente.")
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ Error durante la instalación: {e}")
+        sys.exit(1)
 
 def run_script_with_venv(script_rel_path: str):
-    """Ejecuta un script usando el intérprete del venv."""
     python_exe = get_python_exe(VENV_DIR)
     script_path = REPO_DIR / script_rel_path
     if not script_path.exists():
-        print(f"❌ El script {script_rel_path} no existe en el repositorio.")
+        print(f"❌ El script {script_rel_path} no existe.")
         return
     print(f"\n🚀 Ejecutando {script_rel_path} con el entorno virtual...\n")
     try:
@@ -150,7 +150,6 @@ def run_script_with_venv(script_rel_path: str):
     input("\nPresiona Enter para volver al menú...")
 
 def mostrar_menu():
-    """Muestra el menú principal y maneja la selección."""
     while True:
         print("\n" + "=" * 60)
         print("  🛠️  MENÚ DE HERRAMIENTAS (entorno virtual activo)  ")
@@ -172,7 +171,7 @@ def mostrar_menu():
         else:
             print("❌ Opción inválida.")
 
-# ─── Punto de entrada principal ────────────────────────────────────────────
+# ─── Punto de entrada ──────────────────────────────────────────────────────
 def main():
     print("🐍 Inicializando el entorno virtual del repositorio...")
     create_venv_if_needed()
