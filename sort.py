@@ -19,6 +19,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from path_manager import get_repo_dir, get_script_dir, get_instance_dir, get_global_profile_path, get_log_path, get_cache_dir
 
 # ─── Dependencias opcionales ───────────────────────────────────────────────
 try:

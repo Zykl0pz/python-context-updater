@@ -18,6 +18,7 @@ from datetime import datetime
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Optional
+from path_manager import get_repo_dir, get_script_dir, get_instance_dir, get_global_profile_path, get_log_path, get_cache_dir
 
 # ─── Colores ANSI para terminal ────────────────────────────────────────────
 class Colors:

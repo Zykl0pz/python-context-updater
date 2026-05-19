@@ -24,7 +24,7 @@ EXCLUDE_FILES = {
     "auto_migrate.py",
 }
 
-# Contenido del módulo path_manager (debe ser el mismo que se mostró antes)
+# Contenido del módulo path_manager
 PATH_MANAGER_CONTENT = '''#!/usr/bin/env python3
 """
 Gestor de rutas para los scripts del repositorio.
@@ -108,40 +108,27 @@ def get_cache_dir(script_file: str) -> Path:
 '''
 
 # ─── Mapeo de reemplazos para cada script ──────────────────────────────────
-# Cada entrada: (nombre_script, lista_de_reemplazos)
-# Los reemplazos son tuplas (buscar, reemplazar) donde buscar puede ser regex o string.
-# También se puede especificar una función de transformación.
-
+# Cada entrada es una lista de tuplas (patrón, reemplazo)
 REPLACEMENTS = {
     "context.py": [
-        # Perfil global
         (r"CONTEXTIGNORE_FILE\s*=\s*['\"]\.contextignore['\"]",
          'CONTEXTIGNORE_FILE = str(get_global_profile_path(__file__, ".contextignore"))'),
-        (r"load_profile\(\)",
-         'load_profile()'),
-        (r"save_profile\(profile\)",
-         'save_profile(profile)'),
         (r"with open\('\.context_profile\.json', 'r'\) as f:",
          'with open(get_global_profile_path(__file__, ".context_profile.json"), "r") as f:'),
         (r"with open\('\.context_profile\.json', 'w'\) as f:",
          'with open(get_global_profile_path(__file__, ".context_profile.json"), "w") as f:'),
-        # Log
         (r"fh = logging\.FileHandler\('context\.log'",
          'fh = logging.FileHandler(str(get_log_path(__file__)))'),
-        # Archivo de estadísticas
         (r"with open\('context_stats\.json', 'w'",
          'with open(str(get_instance_dir(__file__) / "context_stats.json"), "w"'),
     ],
     "list_packages.py": [
         (r"fh = logging\.FileHandler\('pkg_list\.log'",
          'fh = logging.FileHandler(str(get_log_path(__file__, "pkg_list.log")))'),
-        (r"load_profile\(profile_path=\"\.pkg_profile\.json\"\)",
-         'load_profile(profile_path=str(get_global_profile_path(__file__, ".pkg_profile.json")))'),
-        (r"save_profile\(profile, profile_path=\"\.pkg_profile\.json\"\)",
-         'save_profile(profile, profile_path=str(get_global_profile_path(__file__, ".pkg_profile.json")))'),
-        # También el perfil por defecto en la función load_profile
         (r"def load_profile\(profile_path=\"\.pkg_profile\.json\"\):",
          'def load_profile(profile_path=None):\n    if profile_path is None:\n        profile_path = str(get_global_profile_path(__file__, ".pkg_profile.json"))'),
+        (r"save_profile\(profile, profile_path=\"\.pkg_profile\.json\"\)",
+         'save_profile(profile, profile_path=str(get_global_profile_path(__file__, ".pkg_profile.json")))'),
     ],
     "rename.py": [
         (r"PROFILE_FILE\s*=\s*['\"]\.rename_profile\.json['\"]",
@@ -154,28 +141,16 @@ REPLACEMENTS = {
          'RENAME_LOG = str(get_instance_dir(__file__) / ".rename_log.json")'),
         (r"save_profile\(args, filename='\.sort_profile\.json'\)",
          'save_profile(args, filename=str(get_global_profile_path(__file__, ".sort_profile.json")))'),
-        (r"load_profile\(filename\)",
-         'load_profile(filename)'),
-        (r"if not os\.path\.isfile\(filename\):",
-         'if not os.path.isfile(filename):'),
-        (r"with open\(filename, 'r'",
-         'with open(filename, "r"'),
     ],
     "compress_to_path.py": [
         (r"PROFILE_FILE\s*=\s*['\"]\.compress_profile\.json['\"]",
          'PROFILE_FILE = str(get_global_profile_path(__file__, ".compress_profile.json"))'),
-        (r"log_file = input\(.*compresor\.log.*\)",
-         # Esto es más complejo, mejor reemplazar la asignación de log_file por defecto
-         r'log_file = input\(colored\("Nombre del archivo de log \[compresor\.log\]: ", Colors.CYAN\)\).strip\(\) or "compresor.log"',
+        (r'log_file = input\(colored\("Nombre del archivo de log \[compresor\.log\]: ", Colors.CYAN\)\).strip\(\) or "compresor\.log"',
          'log_file = input(colored("Nombre del archivo de log [compresor.log]: ", Colors.CYAN)).strip() or str(get_log_path(__file__, "compresor.log"))'),
-        # También en setup_logging
         (r"setup_logging\(quiet, log_file\)",
          'setup_logging(quiet, log_file)'),
     ],
     "http_server.py": [
-        # Añadir import y redirigir log_message a un archivo
-        # Se añadirá código al final del archivo o se modificará la clase.
-        # Por simplicidad, añadimos una importación y modificamos el método log_message.
         (r"class CustomHandler\(BaseHTTPRequestHandler\):",
          'class CustomHandler(BaseHTTPRequestHandler):\n    def __init__(self, *args, **kwargs):\n        self.log_path = get_instance_dir(__file__) / "http_server.log"\n        super().__init__(*args, **kwargs)'),
         (r"def log_message\(self, format, \*args\):",
@@ -184,13 +159,8 @@ REPLACEMENTS = {
     "start.py": [
         (r"LOG_FILE\s*=\s*REPO_DIR / \"start\.log\"",
          'LOG_FILE = get_log_path(__file__, "start.log")'),
-        (r"logging\.basicConfig\(",
-         'logging.basicConfig('),
     ],
-    "bootstrap.py": [
-        # No necesita cambios porque no guarda logs permanentes? Pero podemos añadir perfil?
-        # Por ahora no.
-    ],
+    "bootstrap.py": [],  # No necesita cambios
 }
 
 # ─── Funciones auxiliares ──────────────────────────────────────────────────
@@ -204,7 +174,6 @@ def add_import_if_missing(content: str, import_line: str) -> str:
     """Añade la línea de importación después de los imports existentes."""
     if import_line in content:
         return content
-    # Buscar la última línea de importación
     lines = content.splitlines()
     insert_pos = 0
     for i, line in enumerate(lines):
@@ -215,19 +184,18 @@ def add_import_if_missing(content: str, import_line: str) -> str:
     lines.insert(insert_pos, import_line)
     return "\n".join(lines)
 
-def apply_replacements(filepath: Path, replacements: List[Tuple[str, str]]):
+def apply_replacements(filepath: Path, replacements: List[Tuple[str, str]]) -> bool:
     """Aplica una serie de reemplazos al contenido del archivo."""
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
     original = content
     for pattern, repl in replacements:
-        # Si el patrón es regex, usar re.sub; si no, reemplazo simple
+        # Si el patrón es una cadena, reemplazo literal; si es compiled regex, usar sub
         if isinstance(pattern, re.Pattern):
             content = pattern.sub(repl, content)
         else:
             content = content.replace(pattern, repl)
     if content != original:
-        # Hacer backup
         backup_file(filepath)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
@@ -241,20 +209,17 @@ def migrate_script(script_path: Path) -> bool:
         print(f"  No hay reemplazos definidos para {script_path.name}, omitiendo.")
         return False
     replacements = REPLACEMENTS[script_path.name]
-    # Añadir importación de path_manager
     import_line = "from path_manager import get_repo_dir, get_script_dir, get_instance_dir, get_global_profile_path, get_log_path, get_cache_dir"
     with open(script_path, "r", encoding="utf-8") as f:
         content = f.read()
     if "from path_manager import" not in content:
         content = add_import_if_missing(content, import_line)
-        # Guardar después de añadir import
         backup_file(script_path)
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(content)
         print(f"  Añadida importación en {script_path.name}")
     else:
         print(f"  La importación ya existe en {script_path.name}")
-    # Aplicar reemplazos
     modified = apply_replacements(script_path, replacements)
     if modified:
         print(f"  Reemplazos aplicados en {script_path.name}")

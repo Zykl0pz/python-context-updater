@@ -17,6 +17,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from path_manager import get_repo_dir, get_script_dir, get_instance_dir, get_global_profile_path, get_log_path, get_cache_dir
 
 # ─── Configuración ─────────────────────────────────────────────────────────
 REPO_DIR = Path(__file__).parent.resolve()
