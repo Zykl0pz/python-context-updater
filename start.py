@@ -23,7 +23,7 @@ from path_manager import get_repo_dir, get_script_dir, get_instance_dir, get_glo
 REPO_DIR = Path(__file__).parent.resolve()
 VENV_DIR = REPO_DIR / "venv"
 REQUIREMENTS_FILE = REPO_DIR / "requirements.txt"
-LOG_FILE = REPO_DIR / "start.log"
+LOG_FILE = get_log_path(__file__, "start.log")
 
 # Dependencias necesarias (se pueden ajustar)
 DEPENDENCIAS = [
