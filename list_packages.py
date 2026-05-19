@@ -47,7 +47,7 @@ def colored(text, color):
 # ─── Logging ───────────────────────────────────────────────────────────────
 logger = logging.getLogger('pkg_list')
 logger.setLevel(logging.DEBUG)
-fh = logging.FileHandler('pkg_list.log', encoding='utf-8')
+fh = logging.FileHandler(str(get_log_path(__file__, "pkg_list.log")), encoding='utf-8')
 fh.setLevel(logging.DEBUG)
 fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 ch = logging.StreamHandler()
@@ -768,7 +768,9 @@ def interactive_selection():
         "save_profile": save
     }
 
-def load_profile(profile_path=".pkg_profile.json"):
+def load_profile(profile_path=None):
+    if profile_path is None:
+        profile_path = str(get_global_profile_path(__file__, ".pkg_profile.json"))
     if os.path.isfile(profile_path):
         try:
             with open(profile_path, 'r') as f:
@@ -777,7 +779,7 @@ def load_profile(profile_path=".pkg_profile.json"):
             pass
     return None
 
-def save_profile(profile, profile_path=".pkg_profile.json"):
+def save_profile(profile, profile_path=str(get_global_profile_path(__file__, ".pkg_profile.json"))):
     try:
         with open(profile_path, 'w') as f:
             json.dump(profile, f, indent=2)
