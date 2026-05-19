@@ -52,7 +52,7 @@ def colored(text, color):
     return text
 
 # ─── Logging para deshacer ────────────────────────────────────────────────
-RENAME_LOG = '.rename_log.json'
+RENAME_LOG = str(get_instance_dir(__file__) / ".rename_log.json")
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
@@ -439,7 +439,7 @@ def parse_args():
     return parser.parse_args()
 
 # ─── Gestión de perfiles ─────────────────────────────────────────────────
-def save_profile(args, filename='.sort_profile.json'):
+def save_profile(args, filename=str(get_global_profile_path(__file__, ".sort_profile.json"))):
     """Guarda las opciones relevantes en un JSON."""
     profile = {
         'path': args.path,
@@ -507,24 +507,24 @@ def main():
         save_profile(args)
 
     # Ejecutar
-    execute(
-        directory=args.path,
-        recursive=args.recursive,
-        max_depth=args.max_depth,
-        include_hidden=args.include_hidden,
-        include_pat=args.include,
-        exclude_pat=args.exclude,
-        sort_by=args.sort_by,
-        order=args.order,
-        tie_breakers=args.tie_breaker,
-        prefix=args.prefix,
-        sep=args.sep,
-        digits=args.digits,
-        index_after=args.index_after,
-        start_index=args.start,
-        dry_run=args.dry_run,
-        save_log=not args.no_log
-    )
+        execute(
+            directory=args.path,
+            recursive=args.recursive,
+            max_depth=args.max_depth,
+            include_hidden=args.include_hidden,
+            include_pat=args.include,
+            exclude_pat=args.exclude,
+            sort_by=args.sort_by,
+            order=args.order,
+            tie_breakers=args.tie_breaker,
+            prefix=args.prefix,
+            sep=args.sep,
+            digits=args.digits,
+            index_after=args.index_after,
+            start_index=args.start,
+            dry_run=args.dry_run,
+            save_log=not args.no_log
+        )
 
 if __name__ == '__main__':
     main()
