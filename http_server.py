@@ -707,6 +707,9 @@ def zip_directory(directory_path: Path):
 
 # ─── Manejador HTTP ─────────────────────────────────────────────────
 class CustomHandler(BaseHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        self.log_path = get_instance_dir(__file__) / "http_server.log"
+        super().__init__(*args, **kwargs)
     def do_GET(self):
         try:
             parsed = urllib.parse.urlparse(self.path)
@@ -788,7 +791,14 @@ class CustomHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Archivo no encontrado")
 
     def log_message(self, format, *args):
+        try:
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{self.log_date_time_string()}] {args[0]}\n")
+
+        except:
+            pass
         sys.stderr.write(f"[{self.log_date_time_string()}] {args[0]}\n")
+
 
 # ─── Punto de entrada ───────────────────────────────────────────────
 def main():
