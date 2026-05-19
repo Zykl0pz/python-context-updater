@@ -20,7 +20,7 @@ HOST = "0.0.0.0"
 PORT = 8080
 BASE_DIR = Path.cwd().resolve()  # Directorio raíz donde se ejecuta el script
 
-# ─── Plantillas HTML ────────────────────────────────────────────────
+# ─── Plantilla HTML con preview y persistencia ─────────────────────
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -55,7 +55,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             padding-bottom: env(safe-area-inset-bottom);
         }
 
-        /* Header */
         .header {
             background: var(--color-primary);
             color: white;
@@ -71,7 +70,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             white-space: nowrap;
         }
 
-        /* Breadcrumb */
         .breadcrumb {
             font-size: var(--font-size-small);
             opacity: 0.9;
@@ -86,7 +84,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .breadcrumb a:hover { opacity: 0.8; }
 
-        /* Controls */
         .controls {
             padding: 0.75rem var(--gap);
             display: flex;
@@ -117,7 +114,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             color: white;
         }
 
-        /* Grid view */
         .grid-view {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax( clamp(110px, 25vw, 200px), 1fr ));
@@ -157,6 +153,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin-bottom: 0.5rem;
             flex: 1;
         }
+        /* Enlace de nombre: para carpetas se comporta normal; para archivos abre preview */
+        .name a, .name span {
+            cursor: pointer;
+            color: var(--color-link);
+            text-decoration: none;
+        }
+        .name a:hover, .name span:hover {
+            text-decoration: underline;
+        }
         .download-btn {
             background: var(--color-download);
             color: white;
@@ -174,7 +179,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background: var(--color-download-hover);
         }
 
-        /* List / Detalles */
         .list-view {
             padding: var(--gap);
             overflow-x: auto;
@@ -185,7 +189,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-collapse: collapse;
             background: white;
             box-shadow: var(--shadow);
-            min-width: 550px; /* Previene que la tabla se encoja demasiado */
+            min-width: 550px;
         }
         th, td {
             padding: 0.6rem;
@@ -216,7 +220,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             word-break: break-word;
         }
 
-        /* Modal */
+        /* Modales */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -260,7 +264,54 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .cancel-btn { background: #e74c3c; color: white; }
         .cancel-btn:hover { background: #c0392b; }
 
-        /* Ajustes específicos para pantallas muy pequeñas */
+        /* Modal de preview (más ancho) */
+        #preview-modal .modal {
+            width: min(95vw, 900px);
+            max-height: 90vh;
+            padding: 1rem;
+            overflow: auto;
+            text-align: left;
+        }
+        #preview-modal .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        #preview-modal .close-preview {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #666;
+        }
+        #preview-content {
+            max-height: 70vh;
+            overflow: auto;
+        }
+        #preview-content img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 0 auto;
+        }
+        #preview-content pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            background: #f0f0f0;
+            padding: 1rem;
+            border-radius: var(--radius);
+            font-size: 0.85rem;
+        }
+        #preview-content audio, #preview-content video {
+            width: 100%;
+        }
+        .preview-message {
+            text-align: center;
+            font-style: italic;
+            color: #666;
+        }
+
         @media (max-width: 480px) {
             .header {
                 flex-direction: column;
@@ -277,7 +328,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
-        /* Ajustes para pantallas grandes (escritorio) */
         @media (min-width: 1024px) {
             .grid-view {
                 grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -315,13 +365,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </table>
     </div>
 
-    <!-- Modal de confirmación -->
+    <!-- Modal de confirmación de descarga -->
     <div id="confirm-modal" class="modal-overlay">
         <div class="modal">
             <p id="modal-message">¿Descargar este elemento?</p>
             <div class="modal-buttons">
                 <button id="modal-confirm" class="confirm-btn">Confirmar</button>
                 <button id="modal-cancel" class="cancel-btn">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de vista previa -->
+    <div id="preview-modal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="preview-title">Vista previa</h3>
+                <button class="close-preview" onclick="closePreview()">✖</button>
+            </div>
+            <div id="preview-content">
+                <p class="preview-message">Cargando...</p>
             </div>
         </div>
     </div>
@@ -334,7 +397,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const modalMessage = document.getElementById('modal-message');
         const confirmBtn = document.getElementById('modal-confirm');
         const cancelBtn = document.getElementById('modal-cancel');
+        const previewModal = document.getElementById('preview-modal');
+        const previewContent = document.getElementById('preview-content');
+        const previewTitle = document.getElementById('preview-title');
         let pendingDownload = null;
+
+        // Persistencia de vista
+        function getSavedViewMode() {
+            return localStorage.getItem('viewMode') || 'grid';
+        }
+        function saveViewMode(mode) {
+            localStorage.setItem('viewMode', mode);
+        }
 
         function render() {
             const breadcrumb = document.getElementById('path-display');
@@ -357,9 +431,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 } else {
                     iconHtml = '<div class="icon">' + item.icon + '</div>';
                 }
-                let nameLink = item.type === 'directory'
-                    ? '<a href="' + item.path + '/">' + item.name + '/</a>'
-                    : '<span>' + item.name + '</span>';
+                let nameHtml;
+                if (item.type === 'directory') {
+                    nameHtml = '<a href="' + item.path + '/">' + item.name + '/</a>';
+                } else {
+                    // Archivo: abre preview con atributos data
+                    nameHtml = `<span data-preview="file" data-path="${item.path}" data-mime="${item.mime}" data-name="${item.name}">${item.name}</span>`;
+                }
                 let downloadBtn = '';
                 if (item.type === 'file') {
                     downloadBtn = `<a class="download-btn" href="${item.path}" data-download="file" data-filename="${item.name}">⬇️ Descargar</a>`;
@@ -368,7 +446,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 }
                 return `<div class="card">
                     ${iconHtml}
-                    <div class="name">${nameLink}</div>
+                    <div class="name">${nameHtml}</div>
                     ${downloadBtn}
                 </div>`;
             }).join('');
@@ -378,9 +456,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 let iconCell = item.type === 'directory'
                     ? '<span class="detail-icon">📁</span>'
                     : (item.is_image ? '<img class="detail-img" src="' + item.path + '" alt="">' : '<span class="detail-icon">' + item.icon + '</span>');
-                let nameCell = item.type === 'directory'
-                    ? '<a href="' + item.path + '/">' + item.name + '/</a>'
-                    : item.name;
+                let nameHtml;
+                if (item.type === 'directory') {
+                    nameHtml = '<a href="' + item.path + '/">' + item.name + '/</a>';
+                } else {
+                    nameHtml = `<span data-preview="file" data-path="${item.path}" data-mime="${item.mime}" data-name="${item.name}">${item.name}</span>`;
+                }
                 let sizeCell = item.type === 'directory' ? '-' : item.size_human;
                 let downloadBtn = '';
                 if (item.type === 'file') {
@@ -389,7 +470,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     downloadBtn = `<a class="download-btn" href="${item.path}?download=zip" data-download="directory" data-filename="${item.name}">⬇️ Descargar</a>`;
                 }
                 return `<tr>
-                    <td>${iconCell} ${nameCell}</td>
+                    <td>${iconCell} ${nameHtml}</td>
                     <td>${sizeCell}</td>
                     <td>${item.mtime}</td>
                     <td>${downloadBtn}</td>
@@ -402,24 +483,87 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             document.getElementById('list-btn').classList.toggle('active', view === 'list');
             document.getElementById('grid-view').style.display = view === 'grid' ? 'grid' : 'none';
             document.getElementById('list-view').style.display = view === 'list' ? 'block' : 'none';
+            saveViewMode(view);
         }
 
-        document.addEventListener('click', function(e) {
-            const target = e.target.closest('.download-btn');
-            if (!target) return;
-            e.preventDefault();
-            const downloadType = target.dataset.download;
-            const fileName = target.dataset.filename;
-            const url = target.getAttribute('href');
-            let message = `¿Descargar "${fileName}"?`;
-            if (downloadType === 'directory') {
-                message += ' Se generará un archivo .zip con todo el contenido.';
+        // Preview handling
+        async function openPreview(filePath, mimeType, fileName) {
+            previewTitle.textContent = fileName;
+            previewContent.innerHTML = '<p class="preview-message">Cargando...</p>';
+            previewModal.classList.add('active');
+
+            try {
+                const response = await fetch(filePath);
+                if (!response.ok) throw new Error('Error al cargar');
+
+                const mainType = mimeType.split('/')[0];
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+
+                if (mainType === 'image') {
+                    previewContent.innerHTML = `<img src="${url}" alt="${fileName}">`;
+                } else if (mainType === 'text' || mimeType === 'application/json' || mimeType === 'application/javascript' || mimeType === 'text/plain' || mimeType === 'application/xml') {
+                    const text = await response.text();
+                    previewContent.innerHTML = `<pre>${escapeHtml(text)}</pre>`;
+                } else if (mainType === 'audio') {
+                    previewContent.innerHTML = `<audio controls src="${url}"></audio>`;
+                } else if (mainType === 'video') {
+                    previewContent.innerHTML = `<video controls src="${url}"></video>`;
+                } else if (mimeType === 'application/pdf') {
+                    previewContent.innerHTML = `<iframe src="${url}" width="100%" height="500px" style="border:none;"></iframe>`;
+                } else {
+                    previewContent.innerHTML = `<p class="preview-message">Vista previa no disponible para este tipo de archivo.</p>
+                    <p class="preview-message"><a href="${filePath}" download="${fileName}" class="download-btn">⬇️ Descargar</a></p>`;
+                }
+            } catch (err) {
+                previewContent.innerHTML = `<p class="preview-message">No se pudo cargar la vista previa.</p>
+                <p class="preview-message"><a href="${filePath}" download="${fileName}" class="download-btn">⬇️ Descargar</a></p>`;
             }
-            modalMessage.textContent = message;
-            pendingDownload = { url, downloadType, fileName };
-            modal.classList.add('active');
+        }
+
+        function closePreview() {
+            previewModal.classList.remove('active');
+            // Limpiar cualquier URL creada
+            previewContent.innerHTML = '';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Eventos delegados para preview y descargas
+        document.addEventListener('click', function(e) {
+            // Preview al hacer clic en el nombre de un archivo
+            const previewTrigger = e.target.closest('span[data-preview="file"]');
+            if (previewTrigger) {
+                e.preventDefault();
+                const path = previewTrigger.dataset.path;
+                const mime = previewTrigger.dataset.mime;
+                const name = previewTrigger.dataset.name;
+                openPreview(path, mime, name);
+                return;
+            }
+
+            // Descargas con confirmación
+            const downloadTrigger = e.target.closest('.download-btn');
+            if (downloadTrigger) {
+                e.preventDefault();
+                const downloadType = downloadTrigger.dataset.download;
+                const fileName = downloadTrigger.dataset.filename;
+                const url = downloadTrigger.getAttribute('href');
+                let message = `¿Descargar "${fileName}"?`;
+                if (downloadType === 'directory') {
+                    message += ' Se generará un archivo .zip con todo el contenido.';
+                }
+                modalMessage.textContent = message;
+                pendingDownload = { url, downloadType, fileName };
+                modal.classList.add('active');
+            }
         });
 
+        // Eventos del modal de confirmación
         confirmBtn.addEventListener('click', () => {
             if (!pendingDownload) return;
             const { url, downloadType, fileName } = pendingDownload;
@@ -433,28 +577,34 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             } else {
                 window.location.href = url;
             }
-            closeModal();
+            closeConfirmModal();
         });
 
-        cancelBtn.addEventListener('click', closeModal);
+        cancelBtn.addEventListener('click', closeConfirmModal);
         modal.addEventListener('click', function(e) {
-            if (e.target === modal) closeModal();
+            if (e.target === modal) closeConfirmModal();
         });
 
-        function closeModal() {
+        function closeConfirmModal() {
             modal.classList.remove('active');
             pendingDownload = null;
         }
 
+        // Cerrar preview con clic fuera del contenido
+        previewModal.addEventListener('click', function(e) {
+            if (e.target === previewModal) closePreview();
+        });
+
+        // Aplicar vista guardada y renderizar
+        const savedView = getSavedViewMode();
+        switchView(savedView);
         render();
-        switchView('grid');
     </script>
 </body>
 </html>"""
 
 # ─── Utilidades ─────────────────────────────────────────────────────
 def get_icon_for_file(name):
-    """Devuelve un emoji representativo según la extensión del archivo."""
     ext = Path(name).suffix.lower()
     icons = {
         '.jpg': '🖼️', '.jpeg': '🖼️', '.png': '🖼️', '.gif': '🖼️', '.bmp': '🖼️', '.svg': '🖼️',
@@ -482,10 +632,6 @@ def format_time(timestamp):
     return time.strftime('%Y-%m-%d %H:%M', time.localtime(timestamp))
 
 def secure_path(requested_path):
-    """
-    Devuelve la ruta absoluta real dentro de BASE_DIR.
-    Lanza ValueError si intenta salir del directorio base.
-    """
     parsed = urllib.parse.urlparse(requested_path)
     path = urllib.parse.unquote(parsed.path)
     full_path = (BASE_DIR / path.lstrip('/')).resolve()
@@ -494,7 +640,6 @@ def secure_path(requested_path):
     return full_path
 
 def generate_directory_data(relative_path):
-    """Genera lista de diccionarios con información de los elementos de un directorio."""
     abs_path = secure_path(relative_path)
     if not abs_path.is_dir():
         raise ValueError("No es un directorio")
@@ -513,24 +658,24 @@ def generate_directory_data(relative_path):
             continue
         is_dir = full.is_dir()
         rel = str(full.relative_to(BASE_DIR)).replace('\\', '/')
+        mime_type, _ = mimetypes.guess_type(str(full))
+        if mime_type is None:
+            mime_type = 'application/octet-stream'
         item = {
             'name': name,
-            'path': '/' + rel,  # ruta relativa desde la raíz del servidor
+            'path': '/' + rel,
             'type': 'directory' if is_dir else 'file',
             'size': stat.st_size,
             'size_human': '-' if is_dir else human_readable_size(stat.st_size),
             'mtime': format_time(stat.st_mtime),
             'icon': get_icon_for_file(name),
-            'is_image': not is_dir and is_image_file(name)
+            'is_image': not is_dir and is_image_file(name),
+            'mime': mime_type  # Nuevo campo
         }
         items.append(item)
     return items
 
 def zip_directory(directory_path: Path):
-    """
-    Crea un archivo ZIP en memoria con el contenido del directorio.
-    Retorna un objeto BytesIO con el zip.
-    """
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         for root, dirs, files in os.walk(directory_path):
@@ -545,12 +690,10 @@ def zip_directory(directory_path: Path):
 class CustomHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
-            # Analizar query string para detectar descarga de directorio
             parsed = urllib.parse.urlparse(self.path)
             query = urllib.parse.parse_qs(parsed.query)
             path_only = parsed.path
 
-            # Si la ruta no termina en '/' y es un directorio, redirigir
             target = secure_path(path_only)
             if target.is_dir() and not path_only.endswith('/') and not query:
                 self.send_response(301)
@@ -558,7 +701,6 @@ class CustomHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            # Descarga de directorio como ZIP
             if target.is_dir() and 'download' in query and query['download'][0] == 'zip':
                 self.serve_directory_zip(target)
                 return
@@ -575,7 +717,6 @@ class CustomHandler(BaseHTTPRequestHandler):
             self.send_error(500, str(e))
 
     def serve_directory_zip(self, dir_path: Path):
-        """Genera y envía un archivo ZIP del directorio solicitado."""
         try:
             zip_buffer = zip_directory(dir_path)
             zip_name = dir_path.name + '.zip'
@@ -589,7 +730,6 @@ class CustomHandler(BaseHTTPRequestHandler):
             self.send_error(500, f"Error al crear ZIP: {e}")
 
     def serve_directory_listing(self, requested_path):
-        """Genera y envía la página HTML con la lista de archivos."""
         display_path = requested_path if requested_path.endswith('/') else requested_path + '/'
         try:
             items = generate_directory_data(display_path)
@@ -613,7 +753,6 @@ class CustomHandler(BaseHTTPRequestHandler):
         self.wfile.write(html.encode('utf-8'))
 
     def serve_file(self, file_path):
-        """Sirve un archivo con el tipo MIME adecuado."""
         mime_type, _ = mimetypes.guess_type(str(file_path))
         if mime_type is None:
             mime_type = 'application/octet-stream'
