@@ -41,8 +41,8 @@ logger = logging.getLogger('renombrador_interactivo')
 logging.basicConfig(format='%(message)s', level=logging.INFO)
 
 # ─── Constantes ────────────────────────────────────────────────────────────
-PROFILE_FILE = '.rename_profile.json'
-RENAME_LOG = '.rename_history.json'  # archivo para deshacer cambios
+PROFILE_FILE = str(get_global_profile_path(__file__, ".rename_profile.json"))
+RENAME_LOG = str(get_instance_dir(__file__) / ".rename_history.json")  # archivo para deshacer cambios
 
 # ─── Funciones de normalización y colisiones ───────────────────────────────
 def obtener_archivos(
