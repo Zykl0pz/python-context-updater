@@ -20,3 +20,4 @@ venv/
 *.txt
 *.xml
 .contextignore
+*.bak

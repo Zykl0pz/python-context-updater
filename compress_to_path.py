@@ -23,6 +23,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from path_manager import get_repo_dir, get_script_dir, get_instance_dir, get_global_profile_path, get_log_path, get_cache_dir
 
 # ─── Dependencias opcionales ───────────────────────────────────────────────
 try:
@@ -148,7 +149,7 @@ def prompt_file_patterns():
     return inc or None, exc or None
 
 # ─── Perfil persistente ──────────────────────────────────────────────────
-PROFILE_FILE = '.compress_profile.json'
+PROFILE_FILE = str(get_global_profile_path(__file__, ".compress_profile.json"))
 
 def load_profile() -> Optional[Dict[str, Any]]:
     if os.path.isfile(PROFILE_FILE):
@@ -689,7 +690,7 @@ def main():
         quiet = prompt_yes_no("¿Modo silencioso (solo errores)?", "n")
         log_file = None
         if prompt_yes_no("¿Guardar registro en archivo de log?", "n"):
-            log_file = input(colored("Nombre del archivo de log [compresor.log]: ", Colors.CYAN)).strip() or "compresor.log"
+            log_file = input(colored("Nombre del archivo de log [compresor.log]: ", Colors.CYAN)).strip() or str(get_log_path(__file__, "compresor.log"))
 
         # Filtros avanzados
         print(colored("\nFiltros avanzados:", Colors.HEADER))

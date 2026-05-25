@@ -11,6 +11,7 @@ import getpass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from path_manager import get_repo_dir, get_script_dir, get_instance_dir, get_global_profile_path, get_log_path, get_cache_dir
 
 # ─── Dependencias opcionales ───────────────────────────────────────────────
 try:
@@ -63,7 +64,7 @@ def colored(text, color):
 # ─── Configuración de logging ──────────────────────────────────────────────
 logger = logging.getLogger('context_generator')
 logger.setLevel(logging.DEBUG)
-fh = logging.FileHandler('context.log', encoding='utf-8')
+fh = logging.FileHandler(str(get_log_path(__file__)), encoding='utf-8')
 fh.setLevel(logging.DEBUG)
 fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 ch = logging.StreamHandler()
@@ -144,7 +145,7 @@ def detect_encoding(filepath):
     return enc
 
 # ─── Gestión de .contextignore ────────────────────────────────────────────
-CONTEXTIGNORE_FILE = '.contextignore'
+CONTEXTIGNORE_FILE = str(get_global_profile_path(__file__, ".contextignore"))
 
 def load_contextignore(start_path='.'):
     """Lee el .contextignore o lo crea con los directorios ignorados por defecto."""
@@ -563,7 +564,7 @@ def load_profile():
     if os.path.isfile('.context_profile.json'):
         if input(colored("¿Cargar perfil anterior? (s/n) [s]: ", Colors.CYAN)).strip().lower() not in ('n','no'):
             try:
-                with open('.context_profile.json', 'r') as f:
+                with open(get_global_profile_path(__file__, ".context_profile.json"), "r") as f:
                     return json.load(f)
             except:
                 pass
@@ -571,7 +572,7 @@ def load_profile():
 
 def save_profile(profile):
     try:
-        with open('.context_profile.json', 'w') as f:
+        with open(get_global_profile_path(__file__, ".context_profile.json"), "w") as f:
             json.dump(profile, f, indent=2)
         print(colored("Perfil guardado.", Colors.GREEN))
     except Exception as e:
@@ -593,9 +594,9 @@ def compact_content(text):
             prev_empty = False
     return '\n'.join(compacted)
 
-# ─── Escritura de salidas ──────────────────────────────────────────────────
-def write_output_md(selected_extensions, tree_text, file_data, toc, compact, line_numbers, metadata, stats_md=''):
-    output_file = 'context.md'
+# ─── Escritura de salidas (ahora reciben output_dir) ───────────────────────
+def write_output_md(output_dir, selected_extensions, tree_text, file_data, toc, compact, line_numbers, metadata, stats_md=''):
+    output_file = output_dir / 'context.md'
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write("# CONTEXTO DEL PROYECTO\n\n")
         f.write(f"**Generado:** {metadata['generated']}  \n")
@@ -631,8 +632,8 @@ def write_output_md(selected_extensions, tree_text, file_data, toc, compact, lin
             f.write(stats_md)
     return output_file
 
-def write_output_json(selected_extensions, tree_text, file_data, metadata):
-    output_file = 'context.json'
+def write_output_json(output_dir, selected_extensions, tree_text, file_data, metadata):
+    output_file = output_dir / 'context.json'
     data = {
         'metadata': metadata,
         'extensions': selected_extensions,
@@ -643,8 +644,8 @@ def write_output_json(selected_extensions, tree_text, file_data, metadata):
         json.dump(data, f, indent=2, ensure_ascii=False)
     return output_file
 
-def write_output_xml(selected_extensions, tree_text, file_data, metadata):
-    output_file = 'context.xml'
+def write_output_xml(output_dir, selected_extensions, tree_text, file_data, metadata):
+    output_file = output_dir / 'context.xml'
     root = ET.Element('context')
     ET.SubElement(root, 'generated').text = metadata['generated']
     ET.SubElement(root, 'system').text = metadata['system']
@@ -664,8 +665,8 @@ def write_output_xml(selected_extensions, tree_text, file_data, metadata):
     tree.write(output_file, encoding='utf-8', xml_declaration=True)
     return output_file
 
-def write_output_txt(selected_extensions, tree_text, file_data, metadata):
-    output_file = 'context.txt'
+def write_output_txt(output_dir, selected_extensions, tree_text, file_data, metadata):
+    output_file = output_dir / 'context.txt'
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(f"CONTEXTO DEL PROYECTO\nGenerado: {metadata['generated']}\nSistema: {metadata['system']}\n")
         f.write(f"Directorio: {metadata['root']}\nExtensiones: {', '.join(selected_extensions)}\n\n")
@@ -707,6 +708,10 @@ def format_stats_md(stats):
 
 # ─── Main ──────────────────────────────────────────────────────────────────
 def main():
+    # Obtener directorio de instancia donde se guardarán todos los archivos generados
+    instance_dir = get_instance_dir(__file__)
+    logger.info(colored(f"Directorio de salida: {instance_dir}", Colors.CYAN))
+
     logger.info(colored("=== Generador de Contexto de Código ===", Colors.BOLD))
 
     # Intentar cargar perfil
@@ -814,9 +819,10 @@ def main():
             'extensions': selected_extensions,
             'stats': stats
         }
-        with open('context_stats.json', 'w', encoding='utf-8') as f:
+        stats_file = instance_dir / "context_stats.json"
+        with open(stats_file, "w", encoding='utf-8') as f:
             json.dump(stats_output, f, indent=2, ensure_ascii=False)
-        print(colored("\nEstadísticas exportadas a context_stats.json", Colors.GREEN))
+        print(colored(f"Estadísticas exportadas a {stats_file}", Colors.GREEN))
         return
 
     # Procesamiento concurrente de archivos
@@ -877,17 +883,17 @@ def main():
     generated_files = []
     for fmt in formats_to_generate:
         if fmt == 'md':
-            out = write_output_md(selected_extensions, tree_text, file_data, toc, compact_flag, line_numbers, metadata, stats_md)
+            out = write_output_md(instance_dir, selected_extensions, tree_text, file_data, toc, compact_flag, line_numbers, metadata, stats_md)
         elif fmt == 'json':
-            out = write_output_json(selected_extensions, tree_text, file_data, metadata)
+            out = write_output_json(instance_dir, selected_extensions, tree_text, file_data, metadata)
         elif fmt == 'xml':
-            out = write_output_xml(selected_extensions, tree_text, file_data, metadata)
+            out = write_output_xml(instance_dir, selected_extensions, tree_text, file_data, metadata)
         elif fmt == 'txt':
-            out = write_output_txt(selected_extensions, tree_text, file_data, metadata)
-        generated_files.append(out)
+            out = write_output_txt(instance_dir, selected_extensions, tree_text, file_data, metadata)
+        generated_files.append(str(out))
 
-    # Exportar estadísticas aparte
-    stats_file = 'context_stats.json'
+    # Exportar estadísticas aparte (también en instance_dir)
+    stats_file = instance_dir / 'context_stats.json'
     stats_export = {
         'metadata': metadata,
         'extensions': selected_extensions,
