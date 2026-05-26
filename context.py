@@ -429,10 +429,22 @@ def read_file_content(filepath):
         except Exception as e:
             return f"[No se pudo leer el archivo: {str(e)}]"
 
-# ─── Árbol de directorios con .contextignore y .gitignore ─────────────────
-def generate_directory_tree(start_path='.', context_patterns=None, git_spec=None):
+# ─── Árbol de directorios con .contextignore y .gitignore (opcionalmente incluye todo) ─────────────────
+def generate_directory_tree(start_path='.', context_patterns=None, git_spec=None, include_all=False):
+    """
+    Genera el árbol de directorios.
+    Si include_all=True, ignora .contextignore, .gitignore y muestra archivos/carpetas ocultos.
+    """
     lines = []
     lines.append(start_path)
+
+    # Si include_all está activado, desactivamos todos los filtros
+    if include_all:
+        context_patterns = []
+        git_spec = None
+        skip_hidden_check = True
+    else:
+        skip_hidden_check = False
 
     def walk_dir(current_path, prefix=""):
         try:
@@ -444,12 +456,17 @@ def generate_directory_tree(start_path='.', context_patterns=None, git_spec=None
         for item in items:
             full = os.path.join(current_path, item)
             rel = os.path.relpath(full, start_path)
-            # Aplicar .gitignore si existe
-            if git_spec and is_ignored_by_gitignore(rel, git_spec):
+            # Aplicar .gitignore solo si no estamos en modo include_all
+            if git_spec and not include_all and is_ignored_by_gitignore(rel, git_spec):
                 continue
             if os.path.isdir(full):
-                if not should_ignore_dir_basic(item) and not should_ignore_by_contextignore(rel + '/', context_patterns):
-                    dirs.append(item)
+                # Ocultos: solo se excluyen si NO estamos en include_all
+                if not skip_hidden_check and should_ignore_dir_basic(item):
+                    continue
+                # .contextignore: solo se aplica si NO estamos en include_all
+                if not include_all and should_ignore_by_contextignore(rel + '/', context_patterns):
+                    continue
+                dirs.append(item)
             else:
                 files.append(item)
         dirs.sort()
@@ -756,11 +773,11 @@ def main():
         except Exception as e:
             logger.warning(f"No se pudo procesar .gitignore: {e}")
 
-    # Generar árbol
-    logger.info(colored("Generando árbol de directorios...", Colors.CYAN))
-    tree_text = generate_directory_tree('.', context_patterns, git_spec)
+    # Generar árbol (include_all=True para mostrar TODO, ignorando .contextignore y .gitignore)
+    logger.info(colored("Generando árbol de directorios (incluyendo elementos ocultos e ignorados)...", Colors.CYAN))
+    tree_text = generate_directory_tree('.', context_patterns, git_spec, include_all=True)
 
-    # Buscar archivos con filtros
+    # Buscar archivos con filtros (ESTA PARTE SÍ RESPETA .contextignore, .gitignore y ocultos)
     file_list = []
     for root, dirs, files in os.walk('.', followlinks=False):
         dirs[:] = [d for d in dirs if not should_ignore_dir_basic(d) and
