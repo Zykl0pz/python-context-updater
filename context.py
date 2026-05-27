@@ -555,6 +555,11 @@ def prompt_line_numbers():
     resp = input(colored("¿Incluir números de línea? (s/n) [n]: ", Colors.CYAN)).strip().lower()
     return resp == 's' or resp == 'si'
 
+def prompt_show_all_in_tree():
+    """Pregunta si se deben mostrar todos los archivos/carpetas en el árbol, incluyendo ignorados y ocultos."""
+    resp = input(colored("¿Mostrar en el árbol de directorios TODOS los archivos/carpetas (incluyendo ignorados y ocultos)? (s/n) [s]: ", Colors.CYAN)).strip().lower()
+    return resp not in ('n', 'no')
+
 def select_output_format():
     print(colored("\nFormato de salida:", Colors.HEADER))
     print("1. Markdown (.md)")
@@ -578,10 +583,11 @@ def prompt_save_profile():
     return resp == 's' or resp == 'si'
 
 def load_profile():
-    if os.path.isfile('.context_profile.json'):
+    profile_path = get_global_profile_path(__file__, ".context_profile.json")
+    if os.path.isfile(profile_path):
         if input(colored("¿Cargar perfil anterior? (s/n) [s]: ", Colors.CYAN)).strip().lower() not in ('n','no'):
             try:
-                with open(get_global_profile_path(__file__, ".context_profile.json"), "r") as f:
+                with open(profile_path, "r") as f:
                     return json.load(f)
             except:
                 pass
@@ -740,6 +746,7 @@ def main():
         line_numbers = profile.get('line_numbers', False)
         include_pat = profile.get('include_pat')
         exclude_pat = profile.get('exclude_pat')
+        show_all_in_tree = profile.get('show_all_in_tree', True)  # Nueva opción
         print(colored("Perfil cargado.", Colors.GREEN))
     else:
         selected_extensions = select_extensions_interactively()
@@ -750,13 +757,15 @@ def main():
         include_pat, exclude_pat = prompt_include_exclude()
         compact_flag = prompt_compact_mode()
         line_numbers = prompt_line_numbers() if output_format in ('md', 'all') else False
+        show_all_in_tree = prompt_show_all_in_tree()  # Nueva pregunta
         profile = {
             'extensions': selected_extensions,
             'format': output_format,
             'compact': compact_flag,
             'line_numbers': line_numbers,
             'include_pat': include_pat,
-            'exclude_pat': exclude_pat
+            'exclude_pat': exclude_pat,
+            'show_all_in_tree': show_all_in_tree
         }
         if prompt_save_profile():
             save_profile(profile)
@@ -773,9 +782,9 @@ def main():
         except Exception as e:
             logger.warning(f"No se pudo procesar .gitignore: {e}")
 
-    # Generar árbol (include_all=True para mostrar TODO, ignorando .contextignore y .gitignore)
-    logger.info(colored("Generando árbol de directorios (incluyendo elementos ocultos e ignorados)...", Colors.CYAN))
-    tree_text = generate_directory_tree('.', context_patterns, git_spec, include_all=True)
+    # Generar árbol respetando la preferencia del usuario
+    logger.info(colored(f"Generando árbol de directorios (include_all={show_all_in_tree})...", Colors.CYAN))
+    tree_text = generate_directory_tree('.', context_patterns, git_spec, include_all=show_all_in_tree)
 
     # Buscar archivos con filtros (ESTA PARTE SÍ RESPETA .contextignore, .gitignore y ocultos)
     file_list = []
