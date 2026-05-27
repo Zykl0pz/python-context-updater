@@ -77,7 +77,10 @@ logger.addHandler(ch)
 language_map = {
     '.py': 'Python','.md': 'Markdown', '.php': 'PHP', '.properties': 'Properties', '.gradle': 'Groovy',
     '.htaccess': 'HTACCESS', '.bat': 'Windows Bash', '.ps1': 'PowerShell', '.sh': 'Bash Scripting',
-    '.env': 'ENV', '.lock': 'LOCK', '.json': 'JSON', '.feature': 'Feature', '.prisma': 'Prisma',
+    '.env': 'ENV', '.env.example': 'ENV',
+    '.gitignore': 'Gitignore', '.contextignore': 'ContextIgnore', '.dockerignore': 'DockerIgnore',
+    '.eslintignore': 'ESLintIgnore', '.prettierignore': 'PrettierIgnore', '.npmignore': 'NPMIgnore',
+    '.lock': 'LOCK', '.json': 'JSON', '.feature': 'Feature', '.prisma': 'Prisma',
     '.db': 'Database', '.js': 'JavaScript', '.jsx': 'ReactJS', '.tsx': 'ReactTS',
     '.java': 'Java', '.c': 'C', '.cpp': 'C++', '.html': 'HTML', '.css': 'CSS', '.rb': 'Ruby',
     '.kt': 'Kotlin', '.go': 'Go (Golang)', '.swift': 'Swift', '.rs': 'Rust', '.cs': 'C#', '.r': 'R',
@@ -95,6 +98,11 @@ language_map = {
     '.ini': 'INI Config', '.cfg': 'Config File', '.toml': 'TOML', '.pdf': 'PDF Document',
 }
 
+# Nombres especiales de archivos de entorno (sin extensión)
+SPECIAL_ENV_NAMES = {'.env', '.env.example', '.env.local', '.env.development', '.env.production'}
+# Archivos de ignorados que queremos incluir explícitamente
+SPECIAL_IGNORE_FILES = {'.gitignore', '.contextignore', '.dockerignore', '.eslintignore', '.prettierignore', '.npmignore'}
+
 # ─── Directorios ignorados por defecto ─────────────────────────────────────
 DEFAULT_IGNORED_DIRS = {
     '__pycache__', 'node_modules', 'dist', 'out', 'build',
@@ -109,8 +117,16 @@ def format_size(size_bytes):
         size_bytes /= 1024.0
     return f"{size_bytes:.1f} PB"
 
-def get_language(extension):
-    return language_map.get(extension, 'Texto')
+def get_language(extension, filename=None):
+    """Devuelve el lenguaje según la extensión o nombre especial."""
+    if extension in language_map:
+        return language_map[extension]
+    if filename and filename in SPECIAL_ENV_NAMES:
+        return 'ENV'
+    if filename and filename in SPECIAL_IGNORE_FILES:
+        # Mapeo para archivos de ignorados
+        return language_map.get(f'.{filename.split(".")[-1]}', 'Ignore file')
+    return 'Texto'
 
 # ─── Encoding cache ────────────────────────────────────────────────────────
 _encoding_cache = {}
@@ -151,7 +167,6 @@ def load_contextignore(start_path='.'):
     """Lee el .contextignore o lo crea con los directorios ignorados por defecto."""
     path = os.path.join(start_path, CONTEXTIGNORE_FILE)
     if not os.path.isfile(path):
-        # Crear con las carpetas por defecto (cada una como patrón directorio)
         patterns = [f"{d}/" for d in sorted(DEFAULT_IGNORED_DIRS)]
         try:
             with open(path, 'w', encoding='utf-8') as f:
@@ -172,12 +187,9 @@ def should_ignore_by_contextignore(rel_path, patterns):
     """Comprueba si la ruta relativa coincide con algún patrón de .contextignore."""
     if not patterns:
         return False
-    # Normalizar a '/'
     path = rel_path.replace(os.sep, '/')
     for pat in patterns:
-        # Si el patrón termina con '/', es un directorio
         if pat.endswith('/'):
-            # Comprobar si la ruta es exactamente ese directorio o está dentro
             if path == pat.rstrip('/') or path.startswith(pat):
                 return True
         else:
@@ -358,7 +370,6 @@ def read_ipynb_content(filepath):
         return f"[Error leyendo IPYNB: {str(e)}]"
 
 def read_pdf_content(filepath):
-    """Extrae texto de un PDF usando PyPDF2 o pdfplumber (si están disponibles)."""
     if HAS_PDFPLUMBER:
         try:
             import pdfplumber
@@ -420,7 +431,6 @@ def read_file_content(filepath):
         try:
             with open(filepath, 'r', encoding=encoding, errors='replace') as f:
                 content = f.read()
-            # Heurística de binario
             if len(content) > 0:
                 control = sum(1 for c in content if ord(c) < 32 and c not in '\n\r\t')
                 if control / len(content) > 0.1:
@@ -429,7 +439,7 @@ def read_file_content(filepath):
         except Exception as e:
             return f"[No se pudo leer el archivo: {str(e)}]"
 
-# ─── Árbol de directorios con .contextignore y .gitignore (opcionalmente incluye todo) ─────────────────
+# ─── Árbol de directorios ──────────────────────────────────────────────────
 def generate_directory_tree(start_path='.', context_patterns=None, git_spec=None, include_all=False):
     """
     Genera el árbol de directorios.
@@ -438,7 +448,6 @@ def generate_directory_tree(start_path='.', context_patterns=None, git_spec=None
     lines = []
     lines.append(start_path)
 
-    # Si include_all está activado, desactivamos todos los filtros
     if include_all:
         context_patterns = []
         git_spec = None
@@ -456,14 +465,11 @@ def generate_directory_tree(start_path='.', context_patterns=None, git_spec=None
         for item in items:
             full = os.path.join(current_path, item)
             rel = os.path.relpath(full, start_path)
-            # Aplicar .gitignore solo si no estamos en modo include_all
             if git_spec and not include_all and is_ignored_by_gitignore(rel, git_spec):
                 continue
             if os.path.isdir(full):
-                # Ocultos: solo se excluyen si NO estamos en include_all
                 if not skip_hidden_check and should_ignore_dir_basic(item):
                     continue
-                # .contextignore: solo se aplica si NO estamos en include_all
                 if not include_all and should_ignore_by_contextignore(rel + '/', context_patterns):
                     continue
                 dirs.append(item)
@@ -506,6 +512,10 @@ def get_available_extensions():
                 _, ext = os.path.splitext(filename)
                 if ext and ext.lower() in language_map:
                     extensions.add(ext.lower())
+                elif filename in SPECIAL_ENV_NAMES:
+                    extensions.add('.env')
+                elif filename in SPECIAL_IGNORE_FILES:
+                    extensions.add(f'.{filename}')
     return sorted(extensions)
 
 def select_extensions_interactively():
@@ -516,8 +526,15 @@ def select_extensions_interactively():
     print(colored("\nExtensiones disponibles:", Colors.HEADER))
     print("=" * 60)
     for i, ext in enumerate(available, 1):
-        lang = get_language(ext)
-        print(f"{i:2d}. {ext:10} -> {lang}")
+        if ext == '.env':
+            lang = 'ENV (archivos .env, .env.example, etc.)'
+        elif ext.startswith('.gitignore'):
+            lang = 'Gitignore file'
+        elif ext.startswith('.contextignore'):
+            lang = 'ContextIgnore file'
+        else:
+            lang = get_language(ext)
+        print(f"{i:2d}. {ext:12} -> {lang}")
     print("\nOpciones: 'all', 'none', 'common', 'office' o números separados por comas.")
     while True:
         sel = input(colored("Tu selección: ", Colors.CYAN)).strip().lower()
@@ -556,7 +573,6 @@ def prompt_line_numbers():
     return resp == 's' or resp == 'si'
 
 def prompt_show_all_in_tree():
-    """Pregunta si se deben mostrar todos los archivos/carpetas en el árbol, incluyendo ignorados y ocultos."""
     resp = input(colored("¿Mostrar en el árbol de directorios TODOS los archivos/carpetas (incluyendo ignorados y ocultos)? (s/n) [s]: ", Colors.CYAN)).strip().lower()
     return resp not in ('n', 'no')
 
@@ -617,7 +633,7 @@ def compact_content(text):
             prev_empty = False
     return '\n'.join(compacted)
 
-# ─── Escritura de salidas (ahora reciben output_dir) ───────────────────────
+# ─── Escritura de salidas ──────────────────────────────────────────────────
 def write_output_md(output_dir, selected_extensions, tree_text, file_data, toc, compact, line_numbers, metadata, stats_md=''):
     output_file = output_dir / 'context.md'
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -746,7 +762,7 @@ def main():
         line_numbers = profile.get('line_numbers', False)
         include_pat = profile.get('include_pat')
         exclude_pat = profile.get('exclude_pat')
-        show_all_in_tree = profile.get('show_all_in_tree', True)  # Nueva opción
+        show_all_in_tree = profile.get('show_all_in_tree', True)
         print(colored("Perfil cargado.", Colors.GREEN))
     else:
         selected_extensions = select_extensions_interactively()
@@ -757,7 +773,7 @@ def main():
         include_pat, exclude_pat = prompt_include_exclude()
         compact_flag = prompt_compact_mode()
         line_numbers = prompt_line_numbers() if output_format in ('md', 'all') else False
-        show_all_in_tree = prompt_show_all_in_tree()  # Nueva pregunta
+        show_all_in_tree = prompt_show_all_in_tree()
         profile = {
             'extensions': selected_extensions,
             'format': output_format,
@@ -782,7 +798,7 @@ def main():
         except Exception as e:
             logger.warning(f"No se pudo procesar .gitignore: {e}")
 
-    # Generar árbol respetando la preferencia del usuario
+    # Generar árbol según preferencia
     logger.info(colored(f"Generando árbol de directorios (include_all={show_all_in_tree})...", Colors.CYAN))
     tree_text = generate_directory_tree('.', context_patterns, git_spec, include_all=show_all_in_tree)
 
@@ -803,15 +819,21 @@ def main():
                 continue
             _, ext = os.path.splitext(filename)
             ext = ext.lower()
-            if ext not in selected_extensions or ext not in language_map:
+            # Casos especiales: .env y archivos de ignorados
+            if filename in SPECIAL_ENV_NAMES:
+                if '.env' in selected_extensions:
+                    file_list.append((filepath, rel, 'ENV'))
                 continue
-            base = os.path.basename(filepath)
-            if include_pat and not fnmatch.fnmatch(base, include_pat):
+            if filename in SPECIAL_IGNORE_FILES:
+                virtual_ext = f'.{filename}'
+                if virtual_ext in selected_extensions:
+                    lang = get_language(ext, filename)
+                    file_list.append((filepath, rel, lang))
                 continue
-            if exclude_pat and fnmatch.fnmatch(base, exclude_pat):
-                continue
-            lang = get_language(ext)
-            file_list.append((filepath, rel, lang))
+            # Extensiones normales
+            if ext in selected_extensions:
+                lang = get_language(ext, filename)
+                file_list.append((filepath, rel, lang))
 
     total_files = len(file_list)
     logger.info(colored(f"Archivos a procesar: {total_files}", Colors.CYAN))
