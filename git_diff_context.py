@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Generador de diferencias Git (HEAD vs Working Directory)
-Incluye fechas de modificación y ordenamiento por fecha.
-Por defecto ordena por fecha y no muestra vista previa.
+Compatible con archivos nuevos, modificados y eliminados.
 """
 
 import os
@@ -46,7 +45,7 @@ try:
 except ImportError:
     HAS_CLIPBOARD = False
 
-# ─── Colores ───────────────────────────────────────────────────────────────
+# ─── Colores ──────────────────────────────────────────────────────────────
 class Colors:
     HEADER = '\033[95m'; BLUE = '\033[94m'; CYAN = '\033[96m'
     GREEN = '\033[92m'; WARNING = '\033[93m'; FAIL = '\033[91m'
@@ -55,14 +54,7 @@ class Colors:
 def colored(text: str, color: str) -> str:
     return f"{color}{text}{Colors.ENDC}" if sys.stdout.isatty() else text
 
-# ─── Utilidades ────────────────────────────────────────────────────────────
-def format_size(size_bytes: int) -> str:
-    for unit in ['B','KB','MB','GB','TB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f}{unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.1f}PB"
-
+# ─── Utilidades generales ─────────────────────────────────────────────────
 def detect_encoding(filepath: Path) -> str:
     if HAS_CHARSET:
         try:
@@ -82,10 +74,13 @@ def detect_encoding(filepath: Path) -> str:
             continue
     return 'utf-8'
 
-def is_binary(filepath: Path) -> bool:
+def is_binary_data(data: bytes) -> bool:
+    return b'\0' in data[:8192]
+
+def is_binary_file(filepath: Path) -> bool:
     try:
         with open(filepath, 'rb') as f:
-            return b'\0' in f.read(8192)
+            return is_binary_data(f.read(8192))
     except:
         return True
 
@@ -119,7 +114,7 @@ def get_last_commit() -> Dict[str, str]:
     except:
         return {}
 
-# ─── Fechas de modificación ───────────────────────────────────────────────
+# ─── Fechas de modificación ──────────────────────────────────────────────
 def get_local_mtime(filepath: Path) -> Optional[float]:
     if filepath.exists():
         try:
@@ -147,7 +142,7 @@ def format_timestamp(ts: Optional[float]) -> str:
         return "[No disponible]"
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 
-# ─── Obtener cambios ──────────────────────────────────────────────────────
+# ─── Obtener cambios desde Git ───────────────────────────────────────────
 def get_all_changes(repo_root: Path) -> List[Dict]:
     try:
         output = subprocess.check_output(
@@ -185,20 +180,23 @@ def get_all_changes(repo_root: Path) -> List[Dict]:
     return changes
 
 def get_original_content(repo_root: Path, path: str) -> Optional[str]:
+    """Devuelve el contenido del archivo en HEAD, o None si no existe o es binario."""
     try:
-        return subprocess.check_output(
+        data = subprocess.check_output(
             ['git', 'show', f'HEAD:{path}'],
             cwd=repo_root,
-            text=True,
             stderr=subprocess.DEVNULL
         )
+        if is_binary_data(data):
+            return None
+        return data.decode('utf-8', errors='replace')
     except:
         return None
 
 def get_current_content(filepath: Path) -> Optional[str]:
     if not filepath.exists():
         return None
-    if is_binary(filepath):
+    if is_binary_file(filepath):
         return None
     enc = detect_encoding(filepath)
     try:
@@ -218,7 +216,7 @@ def get_unified_diff(repo_root: Path, filepath: str, context: int = 3) -> str:
     except:
         return "[No se pudo generar diff]"
 
-# ─── Filtros .contextignore ───────────────────────────────────────────────
+# ─── Filtros .contextignore ──────────────────────────────────────────────
 def load_contextignore(repo_root: Path) -> List[str]:
     ignore_file = repo_root / '.contextignore'
     if not ignore_file.exists():
@@ -240,7 +238,7 @@ def should_ignore(rel_path: str, patterns: List[str]) -> bool:
                 return True
     return False
 
-# ─── Menú interactivo y perfil ────────────────────────────────────────────
+# ─── Menú interactivo y perfil ───────────────────────────────────────────
 def load_profile(profile_path: Path) -> Optional[Dict]:
     if profile_path.exists():
         try:
@@ -260,45 +258,36 @@ def save_profile(profile_path: Path, profile: Dict):
 
 def interactive_menu() -> Dict:
     print(colored("\n=== CONFIGURACIÓN DEL INFORME ===", Colors.BOLD))
-    # Filtros por estado
     print(colored("\nFiltrar por tipo de cambio (M,A,D,U,R,C o all):", Colors.HEADER))
     status_choice = input(colored("Selección [all]: ", Colors.CYAN)).strip().lower() or 'all'
     if status_choice == 'all':
         status_filters = ['M','A','D','U','R','C']
     else:
         status_filters = [s.upper() for s in status_choice.split(',') if s.upper() in 'MADURC']
-    # Extensiones
     inc_ext = input(colored("Extensiones a incluir (ej. .py,.md) [vacío = todas]: ", Colors.CYAN)).strip()
     inc_ext_list = [e.lower() for e in inc_ext.split(',')] if inc_ext else []
-    # Patrón exclusión
     exc_pattern = input(colored("Patrón de exclusión (ej. test_*): ", Colors.CYAN)).strip() or None
-    # Estilo diff
     print(colored("\nEstilo de presentación:", Colors.HEADER))
     print("1. Archivo completo (original vs modificado)")
     print("2. Diff unificado (solo líneas cambiadas)")
     print("3. Ambos")
     style = input(colored("Elige (1-3) [1]: ", Colors.CYAN)).strip() or '1'
     diff_style = {'1':'full','2':'unified','3':'both'}[style]
-    # Formato salida
     print(colored("\nFormato de salida:", Colors.HEADER))
     print("1. Markdown  2. JSON  3. XML  4. Texto  5. HTML  6. Patch  7. Todos  8. Solo estadísticas")
     fmt = input(colored("Elige (1-8) [1]: ", Colors.CYAN)).strip() or '1'
     fmt_map = {'1':'md','2':'json','3':'xml','4':'txt','5':'html','6':'patch','7':'all','8':'stats'}
     output_format = fmt_map[fmt]
-    # Opciones presentación
     compact = input(colored("Modo compacto (reducir líneas vacías)? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
     line_nums = False
     if output_format in ('md', 'all'):
         line_nums = input(colored("Incluir números de línea? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
-    # Fechas y orden
     show_dates = input(colored("¿Mostrar fechas de modificación (local y en HEAD)? (s/n) [s]: ", Colors.CYAN)).strip().lower() != 'n'
-    sort_by_date = True  # por defecto sí ordenar
+    sort_by_date = True
     if show_dates:
         sort_by_date = input(colored("¿Ordenar archivos por fecha de modificación local (más reciente primero)? (s/n) [s]: ", Colors.CYAN)).strip().lower() != 'n'
-    # Vista previa: por defecto no
     preview = input(colored("Vista previa antes de exportar? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
     clipboard = input(colored("Copiar al portapapeles? (requiere pyperclip) (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
-    # Guardar perfil
     save = input(colored("¿Guardar esta configuración como perfil? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
     config = {
         'status_filters': status_filters,
@@ -317,7 +306,7 @@ def interactive_menu() -> Dict:
         save_profile(Path.cwd() / '.git_diff_simple_profile.json', config)
     return config
 
-# ─── Generación de salidas (firmas unificadas) ────────────────────────────
+# ─── Generación de salidas (todas las funciones necesarias) ──────────────
 def escape_html(text: str) -> str:
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
@@ -337,9 +326,19 @@ def generate_markdown(files_data: List[Dict], metadata: Dict, diff_style: str = 
             lines.append(f"- **Fecha en HEAD:** {head}  \n\n")
         if diff_style in ('full','both'):
             lines.append("#### Original\n```\n")
-            lines.append(d['original'] if d['original'] else "[No existe en HEAD]\n")
+            if d['original'] is None:
+                lines.append("[Archivo no existe en HEAD (nuevo o binario)]\n")
+            elif d['original'] == "":
+                lines.append("[Archivo vacío en HEAD]\n")
+            else:
+                lines.append(d['original'])
             lines.append("\n```\n#### Modificado\n```\n")
-            lines.append(d['modified'] if d['modified'] else "[No existe en WD]\n")
+            if d['modified'] is None:
+                lines.append("[Archivo no existe en WD (eliminado o binario)]\n")
+            elif d['modified'] == "":
+                lines.append("[Archivo vacío en WD]\n")
+            else:
+                lines.append(d['modified'])
             lines.append("\n```\n")
         if diff_style in ('unified','both') and d.get('unified_diff'):
             lines.append("#### Diff unificado\n```diff\n")
@@ -379,9 +378,19 @@ def generate_txt(files_data: List[Dict], metadata: Dict, diff_style: str = 'full
             lines.append(f"Fecha modificación local: {local}\nFecha en HEAD: {head}\n")
         if diff_style in ('full','both'):
             lines.append("ORIGINAL:\n")
-            lines.append(d['original'] if d['original'] else "[No existe]")
+            if d['original'] is None:
+                lines.append("[No existe en HEAD]\n")
+            elif d['original'] == "":
+                lines.append("[Vacío]\n")
+            else:
+                lines.append(d['original'])
             lines.append("\nMODIFICADO:\n")
-            lines.append(d['modified'] if d['modified'] else "[No existe]")
+            if d['modified'] is None:
+                lines.append("[No existe en WD]\n")
+            elif d['modified'] == "":
+                lines.append("[Vacío]\n")
+            else:
+                lines.append(d['modified'])
         if diff_style in ('unified','both') and d.get('unified_diff'):
             lines.append("\nDIFF:\n")
             lines.append(d['unified_diff'])
@@ -405,23 +414,27 @@ def generate_html(files_data: List[Dict], metadata: Dict, diff_style: str = 'ful
             html += f"<p><strong>Modificación local:</strong> {local}<br><strong>Modificación en HEAD:</strong> {head}</p>"
         if diff_style in ('full','both'):
             html += "<h3>Original</h3><pre>"
-            if d['original']:
+            if d['original'] is None:
+                html += "[No existe en HEAD]"
+            elif d['original'] == "":
+                html += "[Vacío]"
+            else:
                 if HAS_PYGMENTS:
                     lexer = get_lexer_by_name(d['language'].lower(), startinline=True)
                     html += highlight(d['original'], lexer, HtmlFormatter())
                 else:
                     html += escape_html(d['original'])
-            else:
-                html += "[No existe]"
             html += "</pre><h3>Modificado</h3><pre>"
-            if d['modified']:
+            if d['modified'] is None:
+                html += "[No existe en WD]"
+            elif d['modified'] == "":
+                html += "[Vacío]"
+            else:
                 if HAS_PYGMENTS:
                     lexer = get_lexer_by_name(d['language'].lower(), startinline=True)
                     html += highlight(d['modified'], lexer, HtmlFormatter())
                 else:
                     html += escape_html(d['modified'])
-            else:
-                html += "[No existe]"
             html += "</pre>"
         if diff_style in ('unified','both') and d.get('unified_diff'):
             html += "<h3>Diff unificado</h3><pre>" + escape_html(d['unified_diff']) + "</pre>"
@@ -449,7 +462,7 @@ def generate_stats(files_data: List[Dict], metadata: Dict = None, diff_style: st
     out = f"Total archivos: {total}\nLíneas +{added} / -{deleted}\nLenguajes: " + ', '.join(f"{k}({v})" for k,v in langs.items())
     return out
 
-# ─── Procesamiento de archivos ────────────────────────────────────────────
+# ─── Procesamiento de archivos (robusto) ─────────────────────────────────
 def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line_nums: bool) -> Dict:
     path = ch['path']
     file_path = repo_root / path
@@ -457,28 +470,66 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
     original = None
     modified = None
     unified = None
+
+    # Fechas
     local_mtime = get_local_mtime(file_path) if file_path.exists() else None
     head_mtime = get_head_mtime(repo_root, path) if status not in ('U','A') else None
-    if status not in ('U','A'):
+
+    # Contenido original (solo si existe en HEAD)
+    if status not in ('U', 'A'):
         original = get_original_content(repo_root, path)
+
+    # Contenido modificado (si el archivo existe en WD)
     if status != 'D' and file_path.exists():
-        if is_binary(file_path):
-            modified = "[Archivo binario - contenido omitido]"
+        if is_binary_file(file_path):
+            modified = None
         else:
             modified = get_current_content(file_path)
+    else:
+        modified = None
+
+    # Diff unificado
     if diff_style in ('unified','both') and status in ('M','A','D','R'):
         unified = get_unified_diff(repo_root, path)
+
+    # Modo compacto
     if compact:
-        if original:
-            original = '\n'.join([l for l in original.splitlines() if l.strip() != ''] or [''])
-        if modified and not modified.startswith("[Archivo binario"):
-            modified = '\n'.join([l for l in modified.splitlines() if l.strip() != ''] or [''])
-    if line_nums and original and diff_style != 'unified':
-        lines_orig = original.splitlines()
-        original = '\n'.join(f"{i+1:4d}: {l}" for i,l in enumerate(lines_orig))
-        if modified and not modified.startswith("[Archivo binario"):
-            lines_mod = modified.splitlines()
-            modified = '\n'.join(f"{i+1:4d}: {l}" for i,l in enumerate(lines_mod))
+        if original and isinstance(original, str):
+            lines = original.splitlines()
+            compacted = []
+            prev_empty = False
+            for line in lines:
+                if line.strip() == '':
+                    if not prev_empty:
+                        compacted.append('')
+                        prev_empty = True
+                else:
+                    compacted.append(line)
+                    prev_empty = False
+            original = '\n'.join(compacted)
+        if modified and isinstance(modified, str):
+            lines = modified.splitlines()
+            compacted = []
+            prev_empty = False
+            for line in lines:
+                if line.strip() == '':
+                    if not prev_empty:
+                        compacted.append('')
+                        prev_empty = True
+                else:
+                    compacted.append(line)
+                    prev_empty = False
+            modified = '\n'.join(compacted)
+
+    # Números de línea
+    if line_nums and diff_style != 'unified':
+        if original and isinstance(original, str):
+            lines = original.splitlines()
+            original = '\n'.join(f"{i+1:4d}: {line}" for i, line in enumerate(lines))
+        if modified and isinstance(modified, str):
+            lines = modified.splitlines()
+            modified = '\n'.join(f"{i+1:4d}: {line}" for i, line in enumerate(lines))
+
     return {
         'path': path,
         'status': status,
@@ -490,7 +541,7 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
         'head_mtime': head_mtime
     }
 
-# ─── Función principal ────────────────────────────────────────────────────
+# ─── Función principal ───────────────────────────────────────────────────
 def main():
     repo_root = get_git_repo_root()
     os.chdir(repo_root)
@@ -508,6 +559,7 @@ def main():
         print(colored("No hay cambios respecto a HEAD.", Colors.GREEN))
         return
 
+    # Filtrar cambios
     status_filters = config['status_filters']
     inc_ext = config['inc_ext']
     exc_pattern = config['exc_pattern']
@@ -531,6 +583,7 @@ def main():
 
     print(colored(f"Procesando {len(filtered)} archivos...", Colors.CYAN))
 
+    # Procesamiento paralelo
     files_data = []
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(process_file, ch, repo_root, config['diff_style'], config['compact'], config['line_numbers']): ch for ch in filtered}
@@ -541,9 +594,11 @@ def main():
             for future in as_completed(futures):
                 files_data.append(future.result())
 
+    # Ordenar por fecha si se pidió
     if config.get('sort_by_date', False):
         files_data.sort(key=lambda x: x.get('local_mtime') or 0, reverse=True)
 
+    # Metadatos
     metadata = {
         'generated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'system': platform.platform(),
@@ -553,6 +608,7 @@ def main():
         'last_commit': get_last_commit()
     }
 
+    # Vista previa
     if config['preview']:
         print(colored("\n=== VISTA PREVIA ===", Colors.BOLD))
         print(f"Archivos a incluir: {len(files_data)}")
@@ -565,9 +621,11 @@ def main():
         if input(colored("¿Continuar? (s/n) [s]: ", Colors.CYAN)).strip().lower() == 'n':
             return
 
+    # Crear directorio de salida
     output_dir = repo_root / 'git_diff_output'
     output_dir.mkdir(exist_ok=True)
 
+    # Calcular versión
     max_v = 0
     for f in output_dir.glob("git_diff_*.*"):
         try:
@@ -594,7 +652,6 @@ def main():
             elif fmt == 'md':
                 content = generate_markdown(files_data, metadata, diff_style, show_dates)
             else:
-                # txt, html
                 func = globals()[f'generate_{fmt}']
                 content = func(files_data, metadata, diff_style, show_dates)
             with open(out_file, 'w', encoding='utf-8') as f:
@@ -616,18 +673,19 @@ def main():
         elif output_format == 'md':
             content = generate_markdown(files_data, metadata, diff_style, show_dates)
         else:
-            # txt, html
             func = globals()[f'generate_{output_format}']
             content = func(files_data, metadata, diff_style, show_dates)
         with open(out_file, 'w', encoding='utf-8') as f:
             f.write(content)
         out_files.append(str(out_file))
 
+    # Mostrar estadísticas en consola
     stats = generate_stats(files_data, metadata, diff_style, show_dates)
     print(colored("\n=== ESTADÍSTICAS ===", Colors.BOLD))
     print(stats)
     print(colored(f"Archivos generados: {', '.join(out_files)}", Colors.GREEN))
 
+    # Copiar al portapapeles si se pidió
     if config['clipboard'] and HAS_CLIPBOARD and out_files:
         try:
             with open(out_files[0], 'r', encoding='utf-8') as f:
