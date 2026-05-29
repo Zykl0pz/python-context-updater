@@ -1,490 +1,707 @@
 #!/usr/bin/env python3
 """
-Generador interactivo de diferencias Git (todos los cambios, como GitHub Desktop)
-Permite seleccionar qué archivos incluir en el informe.
+Generador universal de diferencias Git (todas las mejoras integradas)
+Interactivo, con perfil, filtros, diff unificado, HTML, parches, watch, etc.
 """
 
 import os
-import subprocess
 import sys
+import subprocess
 import json
 import xml.etree.ElementTree as ET
 import platform
 import getpass
+import argparse
+import fnmatch
+import hashlib
+import tempfile
+import shutil
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import logging
+from typing import List, Dict, Optional, Tuple, Any
 
-# ─── Importar utilidades de context.py si existe ───────────────────────────
+# ─── Dependencias opcionales ───────────────────────────────────────────────
 try:
-    from context import (
-        Colors, colored, format_size, compact_content, get_language,
-        get_instance_dir, get_next_version, load_profile, save_profile,
-        prompt_compact_mode, prompt_line_numbers, select_output_format,
-        prompt_save_profile
-    )
-    HAS_CONTEXT = True
+    from charset_normalizer import from_bytes
+    HAS_CHARSET = True
 except ImportError:
-    # Implementaciones mínimas
-    class Colors:
-        HEADER = '\033[95m'; BLUE = '\033[94m'; CYAN = '\033[96m'
-        GREEN = '\033[92m'; WARNING = '\033[93m'; FAIL = '\033[91m'
-        ENDC = '\033[0m'; BOLD = '\033[1m'; UNDERLINE = '\033[4m'
-    def colored(text, color):
-        return f"{color}{text}{Colors.ENDC}" if sys.stdout.isatty() else text
-    def format_size(size_bytes):
-        for unit in ['B','KB','MB','GB','TB']:
-            if size_bytes < 1024.0:
-                return f"{size_bytes:.1f}{unit}"
-            size_bytes /= 1024.0
-        return f"{size_bytes:.1f}PB"
-    def compact_content(text):
-        lines = text.splitlines()
-        compacted = []
-        prev_empty = False
-        for line in lines:
-            if line.strip() == '':
-                if not prev_empty:
-                    compacted.append('')
-                    prev_empty = True
-            else:
-                compacted.append(line)
-                prev_empty = False
-        return '\n'.join(compacted)
-    def get_instance_dir(caller_file):
-        base = Path.cwd() / "context_generation"
-        base.mkdir(exist_ok=True)
-        return base
-    def get_next_version(output_dir):
-        max_v = 0
-        for f in output_dir.glob("git_changes_*.md"):
-            try:
-                num = int(f.stem.split('_')[-1])
-                if num > max_v: max_v = num
-            except: pass
-        return max_v + 1
-    def load_profile():
-        profile_path = Path.cwd() / ".git_changes_profile.json"
-        if profile_path.exists():
-            try:
-                with open(profile_path, "r") as f:
-                    return json.load(f)
-            except: pass
-        return None
-    def save_profile(profile):
+    HAS_CHARSET = False
+
+try:
+    import pathspec
+    HAS_PATHSPEC = True
+except ImportError:
+    HAS_PATHSPEC = False
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+
+try:
+    import pygments
+    from pygments import highlight
+    from pygments.lexers import get_lexer_by_name, guess_lexer
+    from pygments.formatters import HtmlFormatter
+    HAS_PYGMENTS = True
+except ImportError:
+    HAS_PYGMENTS = False
+
+try:
+    import pyperclip
+    HAS_CLIPBOARD = True
+except ImportError:
+    HAS_CLIPBOARD = False
+
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+    HAS_WATCHDOG = True
+except ImportError:
+    HAS_WATCHDOG = False
+
+# ─── Colores ANSI ──────────────────────────────────────────────────────────
+class Colors:
+    HEADER = '\033[95m'; BLUE = '\033[94m'; CYAN = '\033[96m'
+    GREEN = '\033[92m'; WARNING = '\033[93m'; FAIL = '\033[91m'
+    ENDC = '\033[0m'; BOLD = '\033[1m'; UNDERLINE = '\033[4m'
+
+def colored(text: str, color: str) -> str:
+    return f"{color}{text}{Colors.ENDC}" if sys.stdout.isatty() else text
+
+# ─── Utilidades generales ──────────────────────────────────────────────────
+def format_size(size_bytes: int) -> str:
+    for unit in ['B','KB','MB','GB','TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f}{unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f}PB"
+
+def detect_encoding(filepath: Path) -> str:
+    if HAS_CHARSET:
         try:
-            with open(".git_changes_profile.json", "w") as f:
-                json.dump(profile, f, indent=2)
-            print(colored("Perfil guardado.", Colors.GREEN))
-        except Exception as e:
-            print(colored(f"No se pudo guardar perfil: {e}", Colors.WARNING))
-    def prompt_compact_mode():
-        resp = input(colored("¿Modo compacto (reducir espacios en blanco)? (s/n) [n]: ", Colors.CYAN)).strip().lower()
-        return resp == 's' or resp == 'si'
-    def prompt_line_numbers():
-        resp = input(colored("¿Incluir números de línea? (s/n) [n]: ", Colors.CYAN)).strip().lower()
-        return resp == 's' or resp == 'si'
-    def select_output_format():
-        print(colored("\nFormato de salida:", Colors.HEADER))
-        print("1. Markdown (.md)")
-        print("2. JSON (.json)")
-        print("3. XML (.xml)")
-        print("4. Texto plano (.txt)")
-        print("5. Solo estadísticas (sin contenido de archivos)")
-        print("6. Todos los formatos (md, json, xml, txt)")
-        while True:
-            choice = input(colored("Elige (1-6) [1]: ", Colors.CYAN)).strip()
-            if choice in ('', '1'): return 'md'
-            elif choice == '2': return 'json'
-            elif choice == '3': return 'xml'
-            elif choice == '4': return 'txt'
-            elif choice == '5': return 'stats'
-            elif choice == '6': return 'all'
-            else: print(colored("Opción no válida.", Colors.WARNING))
-    def prompt_save_profile():
-        resp = input(colored("¿Guardar este perfil para futuras ejecuciones? (s/n) [n]: ", Colors.CYAN)).strip().lower()
-        return resp == 's' or resp == 'si'
-    language_map = {'.py':'Python','.js':'JavaScript','.md':'Markdown'}
-    def get_language(ext, filename=None):
-        return language_map.get(ext.lower(), 'Texto')
-    HAS_CONTEXT = False
+            with open(filepath, 'rb') as f:
+                raw = f.read(8192)
+            result = from_bytes(raw)
+            if result.best():
+                return result.best().encoding
+        except:
+            pass
+    for enc in ['utf-8', 'latin-1', 'cp1252']:
+        try:
+            with open(filepath, 'r', encoding=enc) as f:
+                f.read(1024)
+            return enc
+        except:
+            continue
+    return 'utf-8'
 
-# ─── Configuración de logging ──────────────────────────────────────────────
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger('git_changes_selector')
-
-# ─── Detección de cambios (como git status --porcelain) ───────────────────
-def get_all_changes():
-    """
-    Detecta todos los cambios en el working directory respecto a HEAD.
-    Retorna lista de dicts con: path, status (M, A, D, U, R, C, etc.), y old_path (si renombrado).
-    """
+def is_binary(filepath: Path) -> bool:
     try:
-        output = subprocess.check_output(
-            ['git', 'status', '--porcelain'],
-            stderr=subprocess.DEVNULL,
-            text=True
-        ).strip()
-        if not output:
+        with open(filepath, 'rb') as f:
+            chunk = f.read(8192)
+            return b'\0' in chunk
+    except:
+        return True
+
+def get_language(ext: str, filename: str = '') -> str:
+    lang_map = {
+        '.py':'Python','.js':'JavaScript','.ts':'TypeScript','.java':'Java',
+        '.c':'C','.cpp':'C++','.go':'Go','.rs':'Rust','.md':'Markdown',
+        '.json':'JSON','.xml':'XML','.yaml':'YAML','.yml':'YAML','.sh':'Bash',
+        '.bat':'Batch','.ps1':'PowerShell','.rb':'Ruby','.php':'PHP','.html':'HTML',
+        '.css':'CSS','.sql':'SQL','.txt':'Text'
+    }
+    if ext in lang_map:
+        return lang_map[ext]
+    if filename in {'.env', '.env.example', '.env.local'}:
+        return 'ENV'
+    return 'Texto'
+
+def get_git_repo_root() -> Path:
+    try:
+        root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip()
+        return Path(root)
+    except:
+        return Path.cwd()
+
+def get_current_branch() -> str:
+    try:
+        return subprocess.check_output(['git', 'branch', '--show-current'], text=True).strip()
+    except:
+        return 'detached'
+
+def get_last_commit() -> Dict[str, str]:
+    try:
+        output = subprocess.check_output(['git', 'log', '-1', '--format=%H%n%s%n%an%n%ae%n%ad'], text=True).strip().splitlines()
+        return {'hash': output[0], 'subject': output[1], 'author': output[2], 'email': output[3], 'date': output[4]}
+    except:
+        return {}
+
+# ─── Filtros de .contextignore ────────────────────────────────────────────
+def load_contextignore(start_path: Path = None) -> List[str]:
+    if start_path is None:
+        start_path = Path.cwd()
+    ignore_file = start_path / '.contextignore'
+    if not ignore_file.exists():
+        default_dirs = ['__pycache__/', 'node_modules/', 'dist/', 'build/', '.git/', '.idea/']
+        with open(ignore_file, 'w') as f:
+            f.write('\n'.join(default_dirs) + '\n')
+        return default_dirs
+    with open(ignore_file, 'r') as f:
+        return [line.strip() for line in f if line.strip() and not line.startswith('#')]
+
+def should_ignore(rel_path: str, patterns: List[str]) -> bool:
+    path = rel_path.replace(os.sep, '/')
+    for pat in patterns:
+        if pat.endswith('/'):
+            if path == pat.rstrip('/') or path.startswith(pat):
+                return True
+        else:
+            if fnmatch.fnmatch(path, pat):
+                return True
+    return False
+
+# ─── Obtención de cambios (con soporte para dos referencias) ──────────────
+def get_all_changes(ref_a: str = 'HEAD', ref_b: str = None, subdir: str = '.') -> List[Dict]:
+    """
+    Obtiene cambios entre ref_a y ref_b.
+    Si ref_b es None, compara working directory con ref_a.
+    Retorna lista con path, status (M, A, D, U, R, C).
+    """
+    if ref_b is None:
+        # Comparar working directory vs ref_a (status porcelana)
+        try:
+            output = subprocess.check_output(['git', 'status', '--porcelain', '--', subdir], text=True, stderr=subprocess.DEVNULL)
+        except:
             return []
-        changes = []
-        for line in output.splitlines():
-            if not line.strip():
-                continue
-            # Formato: XY path [-> old_path] (para renombrados)
-            status_code = line[:2]
-            rest = line[3:].strip()
-            # Analizar estado
-            x = status_code[0]  # staged
-            y = status_code[1]  # unstaged / working tree
-            # Determinar el estado principal (similar a GitHub Desktop)
-            if y == 'M' or x == 'M':
-                final_status = 'M'  # modified
-            elif y == 'D' or x == 'D':
-                final_status = 'D'  # deleted
-            elif y == 'A' or x == 'A':
-                final_status = 'A'  # added
-            elif y == 'R' or x == 'R':
-                final_status = 'R'  # renamed
-                parts = rest.split(' -> ')
-                path = parts[1] if len(parts) > 1 else rest
-                old_path = parts[0] if len(parts) > 1 else None
-                changes.append({'path': path, 'status': final_status, 'old_path': old_path})
-                continue
-            elif y == 'C' or x == 'C':
-                final_status = 'C'  # copied
-            elif y == '?' and x == '?':
-                final_status = 'U'  # untracked
-            elif y == '!' and x == '!':
-                continue  # ignorado, no lo mostramos
-            else:
-                final_status = '?'  # otro
-            changes.append({'path': rest, 'status': final_status})
-        return changes
-    except subprocess.CalledProcessError:
-        logger.error(colored("Error: No estás en un repositorio Git.", Colors.FAIL))
-        sys.exit(1)
-
-def get_original_content_from_git(filepath):
-    """Contenido en HEAD, o None si no existe."""
-    try:
-        return subprocess.check_output(
-            ['git', 'show', f'HEAD:{filepath}'],
-            stderr=subprocess.DEVNULL,
-            text=True
-        )
-    except subprocess.CalledProcessError:
-        return None
-
-def read_current_content(filepath):
-    """Lee el archivo actual del disco."""
-    if not os.path.isfile(filepath):
-        return None
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            return f.read()
-    except Exception as e:
-        return f"[Error leyendo archivo: {e}]"
-
-# ─── Interfaz para seleccionar archivos ────────────────────────────────────
-def select_files_interactively(changes):
-    """Muestra lista de cambios y permite seleccionar cuáles incluir."""
-    if not changes:
-        return []
-    print(colored("\n=== ARCHIVOS CON CAMBIOS ===", Colors.BOLD))
-    for i, ch in enumerate(changes, 1):
-        status_display = {
-            'M': 'Modificado',
-            'A': 'Agregado (staged)',
-            'D': 'Eliminado',
-            'U': 'Untracked (nuevo)',
-            'R': 'Renombrado',
-            'C': 'Copiado'
-        }.get(ch['status'], ch['status'])
-        extra = f" (de: {ch['old_path']})" if ch.get('old_path') else ""
-        print(f"{i:2d}. [{status_display}] {ch['path']}{extra}")
-    print("\nOpciones: 'all', 'none', o números separados por comas (ej. 1,3,5-7)")
-    while True:
-        sel = input(colored("Selecciona los archivos a incluir: ", Colors.CYAN)).strip().lower()
-        if sel == 'all':
+    else:
+        # Comparar dos commits
+        try:
+            output = subprocess.check_output(['git', 'diff', '--name-status', f'{ref_a}..{ref_b}', '--', subdir], text=True, stderr=subprocess.DEVNULL)
+            # Convertir a formato similar: 'M\tpath'
+            changes = []
+            for line in output.strip().splitlines():
+                if not line:
+                    continue
+                parts = line.split(maxsplit=1)
+                if len(parts) != 2:
+                    continue
+                status, path = parts[0], parts[1]
+                # M, A, D, R, etc.
+                changes.append({'path': path, 'status': status[0]})
             return changes
-        elif sel == 'none':
+        except:
             return []
+    # Parsear git status --porcelain
+    changes = []
+    for line in output.strip().splitlines():
+        if not line:
+            continue
+        status_code = line[:2]
+        rest = line[3:].strip()
+        x, y = status_code[0], status_code[1]
+        if y == 'M' or x == 'M':
+            final_status = 'M'
+        elif y == 'D' or x == 'D':
+            final_status = 'D'
+        elif y == 'A' or x == 'A':
+            final_status = 'A'
+        elif y == 'R' or x == 'R':
+            final_status = 'R'
+            # Formato: "R  old -> new"
+            if ' -> ' in rest:
+                new_path = rest.split(' -> ')[1]
+                changes.append({'path': new_path, 'status': final_status, 'old_path': rest.split(' -> ')[0]})
+                continue
+        elif y == '?' and x == '?':
+            final_status = 'U'
         else:
-            selected_indices = set()
-            try:
-                parts = sel.split(',')
-                for part in parts:
-                    part = part.strip()
-                    if '-' in part:
-                        start, end = map(int, part.split('-'))
-                        selected_indices.update(range(start, end+1))
-                    else:
-                        selected_indices.add(int(part))
-                selected = [changes[i-1] for i in selected_indices if 1 <= i <= len(changes)]
-                if selected:
-                    return selected
-            except ValueError:
-                pass
-            print(colored("Selección no válida, intente otra vez.", Colors.WARNING))
+            continue
+        changes.append({'path': rest, 'status': final_status})
+    return changes
 
-# ─── Generación de salida para diferencias ─────────────────────────────────
-def generate_diff_text(original, modified, status, compact, line_numbers):
-    if compact:
-        if original: original = compact_content(original)
-        if modified: modified = compact_content(modified)
-    lines = []
-    lines.append("### Versión ORIGINAL (HEAD)")
-    if original is None:
-        if status == 'U':
-            lines.append("[Archivo nuevo (untracked) - no existe en HEAD]")
-        elif status == 'A':
-            lines.append("[Archivo agregado (staged) - no existe en HEAD]")
-        else:
-            lines.append("[Archivo no existe en HEAD]")
-    elif original.strip() == "":
-        lines.append("[Archivo vacío en HEAD]")
+def get_original_content(ref: str, filepath: str) -> Optional[str]:
+    try:
+        return subprocess.check_output(['git', 'show', f'{ref}:{filepath}'], text=True, stderr=subprocess.DEVNULL)
+    except:
+        return None
+
+def get_current_content(filepath: Path) -> Optional[str]:
+    if not filepath.exists():
+        return None
+    if is_binary(filepath):
+        return None
+    encoding = detect_encoding(filepath)
+    try:
+        with open(filepath, 'r', encoding=encoding, errors='replace') as f:
+            return f.read()
+    except:
+        return None
+
+def get_unified_diff(ref_a: str, ref_b: str = None, filepath: str = None, context_lines: int = 3) -> str:
+    """Obtiene diff unificado de un archivo entre ref_a y ref_b (o WD si ref_b None)."""
+    if ref_b is None:
+        cmd = ['git', 'diff', f'-U{context_lines}', ref_a, '--', filepath]
     else:
-        if line_numbers:
-            orig_lines = original.splitlines()
-            lines.append('\n'.join(f"{i+1:4d}: {line}" for i, line in enumerate(orig_lines)))
-        else:
-            lines.append(original)
-    lines.append("\n### Versión MODIFICADA (Working Directory)")
-    if status == 'D':
-        lines.append("[Archivo ELIMINADO en el Working Directory]")
-    elif modified is None:
-        lines.append("[Archivo no encontrado en Working Directory]")
-    elif modified.strip() == "":
-        lines.append("[Archivo vacío en el WD]")
+        cmd = ['git', 'diff', f'-U{context_lines}', f'{ref_a}..{ref_b}', '--', filepath]
+    try:
+        return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+    except:
+        return "[No se pudo generar diff]"
+
+# ─── Clase para cache de contenidos originales ────────────────────────────
+class ContentCache:
+    def __init__(self):
+        self._cache = {}
+    def get_original(self, ref: str, path: str) -> Optional[str]:
+        key = f"{ref}:{path}"
+        if key not in self._cache:
+            self._cache[key] = get_original_content(ref, path)
+        return self._cache[key]
+    def clear(self):
+        self._cache.clear()
+
+# ─── Menú interactivo y perfil ────────────────────────────────────────────
+def load_profile(profile_path: Path) -> Optional[Dict]:
+    if profile_path.exists():
+        try:
+            with open(profile_path, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return None
+
+def save_profile(profile_path: Path, profile: Dict):
+    try:
+        with open(profile_path, 'w') as f:
+            json.dump(profile, f, indent=2)
+        print(colored(f"Perfil guardado en {profile_path}", Colors.GREEN))
+    except Exception as e:
+        print(colored(f"No se pudo guardar perfil: {e}", Colors.WARNING))
+
+def interactive_menu(profile: Optional[Dict] = None) -> Dict:
+    """Devuelve configuración: ref_a, ref_b, subdir, status_filters, ext_filters, diff_style, output_format, compact, line_numbers, etc."""
+    print(colored("\n=== CONFIGURACIÓN DEL INFORME ===", Colors.BOLD))
+    # 1. Comparar entre commits o con working directory
+    if profile and 'ref_a' in profile:
+        ref_a = profile['ref_a']
+        ref_b = profile.get('ref_b')
+        print(colored(f"Referencias cargadas: {ref_a} -> {ref_b if ref_b else 'Working Directory'}", Colors.GREEN))
     else:
-        if line_numbers:
-            mod_lines = modified.splitlines()
-            lines.append('\n'.join(f"{i+1:4d}: {line}" for i, line in enumerate(mod_lines)))
+        ref_a = input(colored("Referencia base (commit, tag, rama) [HEAD]: ", Colors.CYAN)).strip() or 'HEAD'
+        ref_b = input(colored("Referencia destino (vacío para Working Directory): ", Colors.CYAN)).strip() or None
+    # 2. Subdirectorio
+    subdir = input(colored("Subdirectorio a analizar (vacío para raíz): ", Colors.CYAN)).strip() or '.'
+    # 3. Filtros por estado
+    print(colored("\nFiltrar por tipo de cambio (múltiples, ej. M,A,U):", Colors.HEADER))
+    print("Opciones: M=Modificado, A=Agregado(staged), D=Eliminado, U=Untracked, R=Renombrado, C=Copiado, all=todos")
+    status_choice = input(colored("Selecciona: [all]: ", Colors.CYAN)).strip().lower() or 'all'
+    if status_choice == 'all':
+        status_filters = ['M','A','D','U','R','C']
+    else:
+        status_filters = [s.upper() for s in status_choice.split(',') if s.upper() in 'MADURC']
+    # 4. Filtros por extensión/patrón
+    inc_ext = input(colored("Extensiones a incluir (ej. .py,.md) o vacío para todos: ", Colors.CYAN)).strip()
+    inc_ext_list = [e.strip().lower() for e in inc_ext.split(',')] if inc_ext else []
+    exc_pattern = input(colored("Patrón de exclusión (ej. test_*, *.min.js): ", Colors.CYAN)).strip() or None
+    # 5. Estilo de diff
+    print(colored("\nEstilo de presentación:", Colors.HEADER))
+    print("1. Archivo completo (original vs modificado)")
+    print("2. Diff unificado (solo líneas cambiadas)")
+    print("3. Ambos")
+    style_choice = input(colored("Elige (1-3) [1]: ", Colors.CYAN)).strip() or '1'
+    diff_style = {'1':'full','2':'unified','3':'both'}.get(style_choice, 'full')
+    # 6. Formato de salida
+    print(colored("\nFormato de salida:", Colors.HEADER))
+    print("1. Markdown (.md)   2. JSON (.json)   3. XML (.xml)   4. Texto (.txt)")
+    print("5. HTML (.html)     6. Parche unificado (.patch)   7. Todos   8. Solo estadísticas")
+    fmt_choice = input(colored("Elige (1-8) [1]: ", Colors.CYAN)).strip() or '1'
+    fmt_map = {'1':'md','2':'json','3':'xml','4':'txt','5':'html','6':'patch','7':'all','8':'stats'}
+    output_format = fmt_map.get(fmt_choice, 'md')
+    # 7. Opciones adicionales
+    compact = input(colored("Modo compacto (reducir líneas vacías)? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
+    line_numbers = input(colored("Incluir números de línea? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
+    preview = input(colored("Mostrar vista previa antes de exportar? (s/n) [s]: ", Colors.CYAN)).strip().lower() != 'n'
+    clipboard = input(colored("Copiar informe al portapapeles? (requiere pyperclip) (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
+    # 8. Tamaño máximo de archivo (MB)
+    max_size_mb = input(colored("Tamaño máximo de archivo a incluir (MB) [10]: ", Colors.CYAN)).strip() or '10'
+    try:
+        max_size_bytes = int(float(max_size_mb) * 1024 * 1024)
+    except:
+        max_size_bytes = 10 * 1024 * 1024
+    # 9. Guardar perfil
+    save = input(colored("¿Guardar esta configuración como perfil? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
+    profile = {
+        'ref_a': ref_a, 'ref_b': ref_b, 'subdir': subdir, 'status_filters': status_filters,
+        'inc_ext': inc_ext_list, 'exc_pattern': exc_pattern, 'diff_style': diff_style,
+        'output_format': output_format, 'compact': compact, 'line_numbers': line_numbers,
+        'preview': preview, 'clipboard': clipboard, 'max_size_bytes': max_size_bytes
+    }
+    if save:
+        save_profile(Path.cwd() / '.git_universal_profile.json', profile)
+    return profile
+
+# ─── Procesamiento de archivos y generación de contenido ──────────────────
+def filter_changes(changes: List[Dict], status_filters: List[str], inc_ext: List[str], exc_pattern: str) -> List[Dict]:
+    filtered = []
+    for ch in changes:
+        if ch['status'] not in status_filters:
+            continue
+        path = ch['path']
+        # Extensión
+        ext = os.path.splitext(path)[1].lower()
+        if inc_ext and ext not in inc_ext:
+            continue
+        # Patrón exclusión
+        if exc_pattern and fnmatch.fnmatch(path, exc_pattern):
+            continue
+        filtered.append(ch)
+    return filtered
+
+def process_file(ch: Dict, ref_a: str, ref_b: Optional[str], cache: ContentCache, diff_style: str,
+                 max_size_bytes: int, compact: bool, line_numbers: bool) -> Dict:
+    path = ch['path']
+    file_path = Path(path)
+    status = ch['status']
+    original = None
+    modified = None
+    unified_diff = None
+    size_ok = True
+    if file_path.exists():
+        size = file_path.stat().st_size
+        if size > max_size_bytes:
+            size_ok = False
+    else:
+        size_ok = True  # eliminado o nuevo
+    # Obtener original (si existe en ref_a)
+    if status != 'U' and status != 'A':
+        original = cache.get_original(ref_a, path)
+        if original and len(original) > max_size_bytes:
+            original = f"[Archivo original demasiado grande ({format_size(len(original))}) - omitido]"
+    # Obtener contenido modificado (si existe en WD)
+    if status != 'D' and file_path.exists() and size_ok:
+        if is_binary(file_path):
+            modified = "[Archivo binario - contenido omitido]"
         else:
-            lines.append(modified)
-    return '\n'.join(lines)
+            modified = get_current_content(file_path)
+            if modified and len(modified) > max_size_bytes:
+                modified = f"[Archivo modificado demasiado grande ({format_size(len(modified))}) - omitido]"
+    elif status == 'D':
+        modified = None
+    elif not size_ok:
+        modified = f"[Archivo excede tamaño máximo ({format_size(size)}) - omitido]"
+    else:
+        modified = None
+    # Diff unificado si se solicita
+    if diff_style in ('unified', 'both') and status in ('M', 'A', 'D', 'R'):
+        if ref_b is None:
+            unified_diff = get_unified_diff(ref_a, None, path)
+        else:
+            unified_diff = get_unified_diff(ref_a, ref_b, path)
+    # Aplicar compactación y números de línea solo si se pide y no es diff unificado
+    if compact and original and diff_style != 'unified':
+        original = '\n'.join([line for line in original.splitlines() if line.strip() != ''] or [''])
+        if modified:
+            modified = '\n'.join([line for line in modified.splitlines() if line.strip() != ''] or [''])
+    if line_numbers and original and diff_style != 'unified':
+        lines = original.splitlines()
+        original = '\n'.join(f"{i+1:4d}: {line}" for i, line in enumerate(lines))
+        if modified:
+            lines_m = modified.splitlines()
+            modified = '\n'.join(f"{i+1:4d}: {line}" for i, line in enumerate(lines_m))
+    return {
+        'path': path, 'status': status, 'language': get_language(os.path.splitext(path)[1], path),
+        'original': original, 'modified': modified, 'unified_diff': unified_diff,
+        'has_binary': (modified is not None and modified.startswith("[Archivo binario"))
+    }
 
-def write_markdown(output_dir, files_data, metadata, version, compact, line_numbers):
-    out_file = output_dir / f'git_changes_{version:03d}.md'
-    with open(out_file, 'w', encoding='utf-8') as f:
-        f.write("# CAMBIOS EN EL REPOSITORIO GIT\n\n")
-        f.write(f"**Generado:** {metadata['generated']}  \n")
-        f.write(f"**Sistema:** {metadata['system']}  \n")
-        f.write(f"**Usuario:** {metadata['user']}  \n")
-        f.write(f"**Directorio:** {metadata['root']}  \n\n")
-        f.write("## Archivos seleccionados\n\n")
-        for d in files_data:
-            status_text = {
-                'M':'Modificado', 'A':'Agregado (staged)', 'D':'Eliminado',
-                'U':'Untracked (nuevo)', 'R':'Renombrado', 'C':'Copiado'
-            }.get(d['status'], d['status'])
-            f.write(f"### `{d['path']}` (Lenguaje: {d['language']}) - {status_text}\n\n")
-            f.write(generate_diff_text(d['original'], d['modified'], d['status'], compact, line_numbers))
-            f.write("\n\n---\n\n")
-    return out_file
+# ─── Generación de salidas (MD, JSON, XML, TXT, HTML, PATCH) ──────────────
+def escape_html(text: str) -> str:
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-def write_json(output_dir, files_data, metadata, version):
-    out_file = output_dir / f'git_changes_{version:03d}.json'
-    with open(out_file, 'w', encoding='utf-8') as f:
-        json.dump({'metadata': metadata, 'files': files_data}, f, indent=2, ensure_ascii=False)
-    return out_file
+def generate_markdown(files_data: List[Dict], metadata: Dict, diff_style: str, compact: bool, line_numbers: bool) -> str:
+    lines = ["# DIFERENCIAS GIT UNIVERSAL\n"]
+    lines.append(f"**Generado:** {metadata['generated']}  \n")
+    lines.append(f"**Repositorio:** {metadata['root']}  \n")
+    lines.append(f"**Rama:** {metadata['branch']}  \n")
+    lines.append(f"**Último commit:** {metadata['last_commit']['hash'][:7]} - {metadata['last_commit']['subject']}  \n")
+    lines.append(f"**Comparación:** {metadata['ref_a']} → {metadata['ref_b'] or 'Working Directory'}  \n\n")
+    lines.append("## Archivos procesados\n\n")
+    for d in files_data:
+        status_text = {'M':'Modificado','A':'Agregado','D':'Eliminado','U':'Untracked','R':'Renombrado'}.get(d['status'], d['status'])
+        lines.append(f"### `{d['path']}` ({d['language']}) - {status_text}\n")
+        if diff_style in ('full', 'both'):
+            lines.append("#### Versión ORIGINAL\n```\n")
+            lines.append(d['original'] if d['original'] else "[No existe en HEAD]\n")
+            lines.append("\n```\n#### Versión MODIFICADA\n```\n")
+            lines.append(d['modified'] if d['modified'] else "[No existe en WD]\n")
+            lines.append("\n```\n")
+        if diff_style in ('unified', 'both') and d.get('unified_diff'):
+            lines.append("#### Diff unificado\n```diff\n")
+            lines.append(d['unified_diff'])
+            lines.append("\n```\n")
+        lines.append("---\n\n")
+    return ''.join(lines)
 
-def write_xml(output_dir, files_data, metadata, version):
-    out_file = output_dir / f'git_changes_{version:03d}.xml'
-    root = ET.Element('git_changes')
+def generate_json(files_data: List[Dict], metadata: Dict) -> str:
+    out = {'metadata': metadata, 'files': files_data}
+    return json.dumps(out, indent=2, ensure_ascii=False)
+
+def generate_xml(files_data: List[Dict], metadata: Dict) -> str:
+    root = ET.Element('git_diff')
     meta = ET.SubElement(root, 'metadata')
     for k, v in metadata.items():
-        ET.SubElement(meta, k).text = v
-    files_elem = ET.SubElement(root, 'files')
+        if k == 'last_commit':
+            lc = ET.SubElement(meta, 'last_commit')
+            for lk, lv in v.items():
+                ET.SubElement(lc, lk).text = str(lv)
+        else:
+            ET.SubElement(meta, k).text = str(v)
+    files_el = ET.SubElement(root, 'files')
     for d in files_data:
-        fe = ET.SubElement(files_elem, 'file')
-        ET.SubElement(fe, 'path').text = d['path']
-        ET.SubElement(fe, 'status').text = d['status']
-        ET.SubElement(fe, 'language').text = d['language']
-        ET.SubElement(fe, 'original').text = d['original'] if d['original'] else ""
-        ET.SubElement(fe, 'modified').text = d['modified'] if d['modified'] else ""
-    ET.indent(root, space="  ")
-    ET.ElementTree(root).write(out_file, encoding='utf-8', xml_declaration=True)
-    return out_file
+        fe = ET.SubElement(files_el, 'file')
+        for k, v in d.items():
+            if v is not None:
+                ET.SubElement(fe, k).text = str(v)
+    return ET.tostring(root, encoding='unicode', xml_declaration=True)
 
-def write_txt(output_dir, files_data, metadata, version):
-    out_file = output_dir / f'git_changes_{version:03d}.txt'
-    with open(out_file, 'w', encoding='utf-8') as f:
-        f.write(f"CAMBIOS GIT\nGenerado: {metadata['generated']}\nSistema: {metadata['system']}\nUsuario: {metadata['user']}\nDirectorio: {metadata['root']}\n\n")
-        for d in files_data:
-            status_text = {
-                'M':'Modificado', 'A':'Agregado', 'D':'Eliminado',
-                'U':'Untracked', 'R':'Renombrado', 'C':'Copiado'
-            }.get(d['status'], d['status'])
-            f.write(f"ARCHIVO: {d['path']} ({d['language']}) - {status_text}\n{'='*60}\n")
-            f.write(generate_diff_text(d['original'], d['modified'], d['status'], compact=False, line_numbers=False))
-            f.write(f"\n{'='*60}\n\n")
-    return out_file
+def generate_txt(files_data: List[Dict], metadata: Dict, diff_style: str) -> str:
+    lines = [f"GIT DIFF UNIVERSAL\nGenerado: {metadata['generated']}\nRepositorio: {metadata['root']}\nRama: {metadata['branch']}\n"]
+    for d in files_data:
+        lines.append(f"\n{'='*60}\nARCHIVO: {d['path']} ({d['language']})\n")
+        if diff_style in ('full','both'):
+            lines.append("ORIGINAL:\n")
+            lines.append(d['original'] if d['original'] else "[No existe]")
+            lines.append("\nMODIFICADO:\n")
+            lines.append(d['modified'] if d['modified'] else "[No existe]")
+        if diff_style in ('unified','both') and d.get('unified_diff'):
+            lines.append("\nDIFF:\n")
+            lines.append(d['unified_diff'])
+    return ''.join(lines)
 
-def write_stats(output_dir, files_data, metadata, version):
-    stats = compute_stats(files_data)
-    out_file = output_dir / f'git_changes_stats_{version:03d}.json'
-    with open(out_file, 'w', encoding='utf-8') as f:
-        json.dump({'metadata': metadata, 'stats': stats}, f, indent=2, ensure_ascii=False)
-    return out_file
+def generate_html(files_data: List[Dict], metadata: Dict, diff_style: str) -> str:
+    css = HtmlFormatter().get_style_defs('.highlight') if HAS_PYGMENTS else ""
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Git Diff Universal</title>
+<style>body{{font-family:sans-serif; margin:2em;}} pre{{background:#f4f4f4; padding:1em; overflow:auto;}} .file{{border-bottom:1px solid #ccc; margin-bottom:2em;}} {css}</style>
+</head><body><h1>Diferencias Git</h1>
+<p>Generado: {metadata['generated']}<br>Repositorio: {metadata['root']}<br>Rama: {metadata['branch']}<br>Comparación: {metadata['ref_a']} → {metadata['ref_b'] or 'WD'}</p>
+"""
+    for d in files_data:
+        html += f"<div class='file'><h2>{d['path']} ({d['language']}) - {d['status']}</h2>"
+        if diff_style in ('full','both'):
+            html += "<h3>Original</h3><pre>"
+            if d['original']:
+                if HAS_PYGMENTS:
+                    lexer = get_lexer_by_name(d['language'].lower(), startinline=True)
+                    html += highlight(d['original'], lexer, HtmlFormatter())
+                else:
+                    html += escape_html(d['original'])
+            else:
+                html += "[No existe]"
+            html += "</pre><h3>Modificado</h3><pre>"
+            if d['modified']:
+                if HAS_PYGMENTS:
+                    lexer = get_lexer_by_name(d['language'].lower(), startinline=True)
+                    html += highlight(d['modified'], lexer, HtmlFormatter())
+                else:
+                    html += escape_html(d['modified'])
+            else:
+                html += "[No existe]"
+            html += "</pre>"
+        if diff_style in ('unified','both') and d.get('unified_diff'):
+            html += "<h3>Diff unificado</h3><pre>" + escape_html(d['unified_diff']) + "</pre>"
+        html += "</div>"
+    html += "</body></html>"
+    return html
 
-def compute_stats(files_data):
-    total = len(files_data)
+def generate_patch(files_data: List[Dict]) -> str:
+    """Genera un parche unificado con todos los diffs."""
+    patch_lines = []
+    for d in files_data:
+        if d.get('unified_diff'):
+            patch_lines.append(d['unified_diff'])
+    return '\n'.join(patch_lines)
+
+def generate_stats(files_data: List[Dict]) -> Dict:
+    total_files = len(files_data)
+    added_lines = 0
+    deleted_lines = 0
     lang_counts = {}
-    status_counts = {'M':0, 'A':0, 'D':0, 'U':0, 'R':0, 'C':0}
-    total_orig_lines = 0
-    total_mod_lines = 0
-    total_orig_size = 0
-    total_mod_size = 0
     for d in files_data:
         lang = d['language']
         lang_counts[lang] = lang_counts.get(lang, 0) + 1
-        status_counts[d['status']] = status_counts.get(d['status'], 0) + 1
-        if d['original']:
-            total_orig_lines += d['original'].count('\n')
-            total_orig_size += len(d['original'].encode('utf-8'))
-        if d['modified']:
-            total_mod_lines += d['modified'].count('\n')
-            total_mod_size += len(d['modified'].encode('utf-8'))
+        if d.get('unified_diff'):
+            # Parsear líneas +/-
+            for line in d['unified_diff'].splitlines():
+                if line.startswith('+') and not line.startswith('+++'):
+                    added_lines += 1
+                elif line.startswith('-') and not line.startswith('---'):
+                    deleted_lines += 1
     return {
-        'total_files': total,
-        'status': status_counts,
-        'original_lines': total_orig_lines,
-        'modified_lines': total_mod_lines,
-        'original_size': format_size(total_orig_size),
-        'modified_size': format_size(total_mod_size),
+        'total_files': total_files,
+        'added_lines': added_lines,
+        'deleted_lines': deleted_lines,
         'languages': lang_counts
     }
 
-def format_stats_md(stats):
-    md = f"- **Archivos procesados:** {stats['total_files']}\n"
-    md += f"  - Modificados: {stats['status'].get('M',0)}\n"
-    md += f"  - Agregados (staged): {stats['status'].get('A',0)}\n"
-    md += f"  - Eliminados: {stats['status'].get('D',0)}\n"
-    md += f"  - Untracked: {stats['status'].get('U',0)}\n"
-    md += f"  - Renombrados/Copiados: {stats['status'].get('R',0)+stats['status'].get('C',0)}\n"
-    md += f"- **Líneas (original):** {stats['original_lines']}\n"
-    md += f"- **Líneas (modificado):** {stats['modified_lines']}\n"
-    md += f"- **Tamaño original:** {stats['original_size']}\n"
-    md += f"- **Tamaño modificado:** {stats['modified_size']}\n"
-    md += f"- **Lenguajes:** {', '.join(f'{k} ({v})' for k,v in sorted(stats['languages'].items(), key=lambda x: x[1], reverse=True))}\n"
-    return md
+# ─── Modo watch (experimental) ────────────────────────────────────────────
+class ChangeHandler(FileSystemEventHandler):
+    def __init__(self, callback):
+        self.callback = callback
+    def on_modified(self, event):
+        if not event.is_directory:
+            self.callback()
+    def on_created(self, event):
+        if not event.is_directory:
+            self.callback()
 
-# ─── Función principal ────────────────────────────────────────────────────
-def main():
-    if not os.path.isdir(".git"):
-        logger.error(colored("No se encontró .git. Ejecuta en la raíz de un repositorio Git.", Colors.FAIL))
-        sys.exit(1)
+def watch_mode(config: Dict):
+    if not HAS_WATCHDOG:
+        print(colored("Modo watch requiere watchdog: pip install watchdog", Colors.WARNING))
+        return
+    print(colored("Modo watch activado. Regenerará informe al detectar cambios. Ctrl+C para salir.", Colors.CYAN))
+    def regenerate():
+        print(colored("Cambios detectados, regenerando...", Colors.GREEN))
+        run_main(config, interactive=False)  # reutilizar lógica
+    handler = ChangeHandler(regenerate)
+    observer = Observer()
+    observer.schedule(handler, path='.', recursive=True)
+    observer.start()
+    try:
+        while True:
+            import time
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
 
-    # Detectar todos los cambios
-    all_changes = get_all_changes()
+# ─── Función principal (puede ser llamada interactiva o con argumentos CLI) ─
+def run_main(config: Dict = None, interactive: bool = True):
+    if interactive:
+        # Cargar perfil anterior si existe
+        profile_path = Path.cwd() / '.git_universal_profile.json'
+        profile = load_profile(profile_path)
+        if profile and input(colored("¿Cargar perfil anterior? (s/n) [s]: ", Colors.CYAN)).strip().lower() != 'n':
+            config = profile
+        else:
+            config = interactive_menu(profile)
+    # Si se pasó config por CLI, usarlo
+    ref_a = config['ref_a']
+    ref_b = config.get('ref_b')
+    subdir = config.get('subdir', '.')
+    status_filters = config.get('status_filters', ['M','A','D','U','R','C'])
+    inc_ext = config.get('inc_ext', [])
+    exc_pattern = config.get('exc_pattern')
+    diff_style = config.get('diff_style', 'full')
+    output_format = config.get('output_format', 'md')
+    compact = config.get('compact', False)
+    line_numbers = config.get('line_numbers', False)
+    preview = config.get('preview', True)
+    clipboard = config.get('clipboard', False)
+    max_size_bytes = config.get('max_size_bytes', 10*1024*1024)
+    # Obtener cambios
+    all_changes = get_all_changes(ref_a, ref_b, subdir)
     if not all_changes:
-        logger.info(colored("No hay cambios detectados (working directory limpio).", Colors.GREEN))
+        print(colored("No se encontraron cambios.", Colors.GREEN))
         return
-
-    # Mostrar resumen y seleccionar archivos
-    print(colored(f"\nTotal de cambios detectados: {len(all_changes)}", Colors.CYAN))
-    selected_changes = select_files_interactively(all_changes)
-    if not selected_changes:
-        logger.info(colored("No se seleccionó ningún archivo. Saliendo.", Colors.WARNING))
+    # Aplicar filtros
+    filtered = filter_changes(all_changes, status_filters, inc_ext, exc_pattern)
+    if not filtered:
+        print(colored("No hay archivos que cumplan los filtros.", Colors.WARNING))
         return
-
-    print(colored(f"\nArchivos seleccionados: {len(selected_changes)}", Colors.GREEN))
-
-    # Cargar perfil o preguntar opciones
-    profile = load_profile()
-    if profile:
-        output_format = profile.get('format', 'md')
-        compact_flag = profile.get('compact', False)
-        line_numbers = profile.get('line_numbers', False)
-        print(colored("Perfil cargado.", Colors.GREEN))
-    else:
-        output_format = select_output_format()
-        compact_flag = prompt_compact_mode()
-        line_numbers = prompt_line_numbers() if output_format in ('md', 'all') else False
-        profile = {'format': output_format, 'compact': compact_flag, 'line_numbers': line_numbers}
-        if prompt_save_profile():
-            save_profile(profile)
-
-    # Preparar directorio de salida
-    instance_dir = get_instance_dir(__file__)
-    version = get_next_version(instance_dir)
-    print(colored(f"Directorio de salida: {instance_dir} - Versión: {version:03d}", Colors.CYAN))
-
-    # Obtener contenidos en paralelo
+    print(colored(f"Procesando {len(filtered)} archivos...", Colors.CYAN))
+    # Cache y procesamiento en paralelo
+    cache = ContentCache()
     files_data = []
     with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {}
-        for ch in selected_changes:
-            path = ch['path']
-            status = ch['status']
-            # Para eliminados, solo original; para untracked/agregados, solo current; para modificados, ambos
-            if status == 'D':
-                futures[executor.submit(get_original_content_from_git, path)] = (path, status, 'original')
-            elif status in ('U', 'A', 'R', 'C'):
-                # Estos no tienen original en HEAD (o es difícil de obtener si renombrado)
-                # Para renombrados, el original estaría en old_path, pero simplificamos: no mostramos original
-                futures[executor.submit(read_current_content, path)] = (path, status, 'current')
-            else:  # M
-                futures[executor.submit(get_original_content_from_git, path)] = (path, status, 'original')
-                futures[executor.submit(read_current_content, path)] = (path, status, 'current')
-        results = {}
-        for future in as_completed(futures):
-            path, status, kind = futures[future]
-            if path not in results:
-                results[path] = {'status': status}
-            results[path][kind] = future.result()
-
-    for path, data in results.items():
-        status = data['status']
-        original = data.get('original') if status in ('M', 'D') else None
-        modified = data.get('current') if status != 'D' else None
-        # Para renombrados, podríamos buscar el original, pero lo dejamos como None
-        if status == 'R':
-            original = None
-        _, ext = os.path.splitext(path)
-        lang = get_language(ext, os.path.basename(path))
-        files_data.append({
-            'path': path,
-            'status': status,
-            'language': lang,
-            'original': original,
-            'modified': modified
-        })
-
+        futures = {executor.submit(process_file, ch, ref_a, ref_b, cache, diff_style, max_size_bytes, compact, line_numbers): ch for ch in filtered}
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Procesando") if HAS_TQDM else as_completed(futures):
+            files_data.append(future.result())
+    # Metadatos
+    repo_root = get_git_repo_root()
     metadata = {
         'generated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'system': platform.platform(),
         'user': getpass.getuser(),
-        'root': os.path.abspath('.')
+        'root': str(repo_root),
+        'branch': get_current_branch(),
+        'last_commit': get_last_commit(),
+        'ref_a': ref_a, 'ref_b': ref_b or 'Working Directory'
     }
-
-    # Generar salida
-    generated_files = []
-    if output_format == 'stats':
-        out = write_stats(instance_dir, files_data, metadata, version)
-        generated_files.append(str(out))
-    elif output_format == 'all':
-        generated_files.append(str(write_markdown(instance_dir, files_data, metadata, version, compact_flag, line_numbers)))
-        generated_files.append(str(write_json(instance_dir, files_data, metadata, version)))
-        generated_files.append(str(write_xml(instance_dir, files_data, metadata, version)))
-        generated_files.append(str(write_txt(instance_dir, files_data, metadata, version)))
-    elif output_format == 'md':
-        generated_files.append(str(write_markdown(instance_dir, files_data, metadata, version, compact_flag, line_numbers)))
-    elif output_format == 'json':
-        generated_files.append(str(write_json(instance_dir, files_data, metadata, version)))
-    elif output_format == 'xml':
-        generated_files.append(str(write_xml(instance_dir, files_data, metadata, version)))
-    elif output_format == 'txt':
-        generated_files.append(str(write_txt(instance_dir, files_data, metadata, version)))
-
+    # Vista previa
+    if preview:
+        print(colored("\n=== VISTA PREVIA ===", Colors.BOLD))
+        print(f"Archivos a incluir: {len(files_data)}")
+        print(f"Estilo diff: {diff_style}")
+        print(f"Formato salida: {output_format}")
+        print(f"Compacto: {compact}, Líneas numeradas: {line_numbers}")
+        confirm = input(colored("¿Continuar? (s/n) [s]: ", Colors.CYAN)).strip().lower()
+        if confirm == 'n':
+            print("Cancelado.")
+            return
+    # Generar contenido según formato
+    output_dir = Path.cwd() / 'git_universal_output'
+    output_dir.mkdir(exist_ok=True)
+    # Calcular siguiente versión
+    max_v = 0
+    for f in output_dir.glob(f"git_universal_*.{output_format if output_format!='all' else '*'}") :
+        try:
+            num = int(f.stem.split('_')[-1])
+            max_v = max(max_v, num)
+        except: pass
+    version = max_v + 1
+    out_files = []
+    if output_format == 'all':
+        for fmt in ['md', 'json', 'xml', 'txt', 'html', 'patch']:
+            out_file = output_dir / f'git_universal_{version:03d}.{fmt}'
+            content = globals()[f'generate_{fmt}'](files_data, metadata, diff_style) if fmt != 'patch' else generate_patch(files_data)
+            with open(out_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+            out_files.append(str(out_file))
+    else:
+        out_file = output_dir / f'git_universal_{version:03d}.{output_format}'
+        if output_format == 'patch':
+            content = generate_patch(files_data)
+        else:
+            generate_func = globals()[f'generate_{output_format}']
+            content = generate_func(files_data, metadata, diff_style)
+        with open(out_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+        out_files.append(str(out_file))
     # Estadísticas
-    stats = compute_stats(files_data)
-    print(colored("\n=== ESTADÍSTICAS FINALES ===", Colors.BOLD))
-    print(format_stats_md(stats))
-    print(colored(f"Archivos generados: {', '.join(generated_files)}", Colors.GREEN))
+    stats = generate_stats(files_data)
+    print(colored("\n=== ESTADÍSTICAS ===", Colors.BOLD))
+    print(f"Archivos: {stats['total_files']}  |  Líneas +{stats['added_lines']} / -{stats['deleted_lines']}")
+    print(f"Lenguajes: {', '.join(f'{k}({v})' for k,v in stats['languages'].items())}")
+    print(colored(f"Archivos generados: {', '.join(out_files)}", Colors.GREEN))
+    # Copiar al portapapeles si se pide
+    if clipboard and HAS_CLIPBOARD:
+        try:
+            with open(out_files[0], 'r', encoding='utf-8') as f:
+                pyperclip.copy(f.read())
+            print(colored("Contenido copiado al portapapeles.", Colors.GREEN))
+        except:
+            print(colored("No se pudo copiar al portapapeles.", Colors.WARNING))
+
+def main():
+    parser = argparse.ArgumentParser(description="Generador universal de diferencias Git")
+    parser.add_argument('--watch', action='store_true', help='Modo watch (regenera automáticamente)')
+    parser.add_argument('--config', type=Path, help='Cargar configuración desde archivo JSON')
+    args = parser.parse_args()
+    if args.watch:
+        # Cargar perfil existente o crear uno por defecto
+        profile_path = Path.cwd() / '.git_universal_profile.json'
+        config = load_profile(profile_path)
+        if not config:
+            config = interactive_menu(None)
+            save_profile(profile_path, config)
+        watch_mode(config)
+    else:
+        run_main(interactive=True)
 
 if __name__ == '__main__':
     main()
