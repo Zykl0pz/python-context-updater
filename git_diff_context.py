@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Generador de diferencias Git simplificado.
-Siempre compara HEAD vs Working Directory, desde la raíz del repo.
+Generador de diferencias Git (HEAD vs Working Directory)
 Incluye fechas de modificación y ordenamiento por fecha.
 """
 
@@ -121,7 +120,6 @@ def get_last_commit() -> Dict[str, str]:
 
 # ─── Fechas de modificación ───────────────────────────────────────────────
 def get_local_mtime(filepath: Path) -> Optional[float]:
-    """Devuelve timestamp de modificación local (segundos desde época) o None si no existe."""
     if filepath.exists():
         try:
             return os.path.getmtime(filepath)
@@ -130,9 +128,7 @@ def get_local_mtime(filepath: Path) -> Optional[float]:
     return None
 
 def get_head_mtime(repo_root: Path, filepath: str) -> Optional[float]:
-    """Devuelve timestamp del último commit que modificó el archivo en HEAD, o None si no existe."""
     try:
-        # Obtener la fecha del commit (epoch seconds) del último cambio del archivo en HEAD
         output = subprocess.check_output(
             ['git', 'log', '-1', '--format=%ct', 'HEAD', '--', filepath],
             cwd=repo_root,
@@ -150,9 +146,8 @@ def format_timestamp(ts: Optional[float]) -> str:
         return "[No disponible]"
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 
-# ─── Obtener cambios (siempre HEAD vs WD) ─────────────────────────────────
+# ─── Obtener cambios ──────────────────────────────────────────────────────
 def get_all_changes(repo_root: Path) -> List[Dict]:
-    """Retorna lista de cambios desde la raíz del repo."""
     try:
         output = subprocess.check_output(
             ['git', 'status', '--porcelain'],
@@ -222,7 +217,7 @@ def get_unified_diff(repo_root: Path, filepath: str, context: int = 3) -> str:
     except:
         return "[No se pudo generar diff]"
 
-# ─── Filtros .contextignore (opcional) ────────────────────────────────────
+# ─── Filtros .contextignore ───────────────────────────────────────────────
 def load_contextignore(repo_root: Path) -> List[str]:
     ignore_file = repo_root / '.contextignore'
     if not ignore_file.exists():
@@ -244,7 +239,7 @@ def should_ignore(rel_path: str, patterns: List[str]) -> bool:
                 return True
     return False
 
-# ─── Menú interactivo (con opciones de fecha y orden) ──────────────────────
+# ─── Menú interactivo y perfil ────────────────────────────────────────────
 def load_profile(profile_path: Path) -> Optional[Dict]:
     if profile_path.exists():
         try:
@@ -294,7 +289,7 @@ def interactive_menu() -> Dict:
     line_nums = False
     if output_format in ('md', 'all'):
         line_nums = input(colored("Incluir números de línea? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
-    # NUEVAS PREGUNTAS: fechas y orden
+    # Fechas y orden
     show_dates = input(colored("¿Mostrar fechas de modificación (local y en HEAD)? (s/n) [s]: ", Colors.CYAN)).strip().lower() != 'n'
     sort_by_date = False
     if show_dates:
@@ -320,11 +315,11 @@ def interactive_menu() -> Dict:
         save_profile(Path.cwd() / '.git_diff_simple_profile.json', config)
     return config
 
-# ─── Generación de salidas (incluyendo fechas) ────────────────────────────
+# ─── Generación de salidas (firmas unificadas) ────────────────────────────
 def escape_html(text: str) -> str:
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-def generate_markdown(files_data: List[Dict], metadata: Dict, diff_style: str, show_dates: bool) -> str:
+def generate_markdown(files_data: List[Dict], metadata: Dict, diff_style: str = 'full', show_dates: bool = False) -> str:
     lines = ["# DIFERENCIAS GIT (HEAD vs Working Directory)\n\n"]
     lines.append(f"**Generado:** {metadata['generated']}  \n")
     lines.append(f"**Repositorio:** {metadata['root']}  \n")
@@ -351,11 +346,10 @@ def generate_markdown(files_data: List[Dict], metadata: Dict, diff_style: str, s
         lines.append("---\n\n")
     return ''.join(lines)
 
-def generate_json(files_data: List[Dict], metadata: Dict, _=None, __=None) -> str:
-    # Incluye fechas automáticamente porque files_data las contiene
+def generate_json(files_data: List[Dict], metadata: Dict, diff_style: str = None, show_dates: bool = None) -> str:
     return json.dumps({'metadata': metadata, 'files': files_data}, indent=2, ensure_ascii=False)
 
-def generate_xml(files_data: List[Dict], metadata: Dict, _=None, __=None) -> str:
+def generate_xml(files_data: List[Dict], metadata: Dict, diff_style: str = None, show_dates: bool = None) -> str:
     root = ET.Element('git_diff')
     meta = ET.SubElement(root, 'metadata')
     for k, v in metadata.items():
@@ -373,7 +367,7 @@ def generate_xml(files_data: List[Dict], metadata: Dict, _=None, __=None) -> str
                 ET.SubElement(fe, k).text = str(v)
     return ET.tostring(root, encoding='unicode', xml_declaration=True)
 
-def generate_txt(files_data: List[Dict], metadata: Dict, diff_style: str, show_dates: bool) -> str:
+def generate_txt(files_data: List[Dict], metadata: Dict, diff_style: str = 'full', show_dates: bool = False) -> str:
     lines = [f"GIT DIFF\nGenerado: {metadata['generated']}\nRepositorio: {metadata['root']}\nRama: {metadata['branch']}\n"]
     for d in files_data:
         lines.append(f"\n{'='*60}\nARCHIVO: {d['path']} ({d['language']})\n")
@@ -391,7 +385,7 @@ def generate_txt(files_data: List[Dict], metadata: Dict, diff_style: str, show_d
             lines.append(d['unified_diff'])
     return ''.join(lines)
 
-def generate_html(files_data: List[Dict], metadata: Dict, diff_style: str, show_dates: bool) -> str:
+def generate_html(files_data: List[Dict], metadata: Dict, diff_style: str = 'full', show_dates: bool = False) -> str:
     css = ""
     if HAS_PYGMENTS:
         css = HtmlFormatter().get_style_defs('.highlight')
@@ -433,10 +427,11 @@ def generate_html(files_data: List[Dict], metadata: Dict, diff_style: str, show_
     html += "</body></html>"
     return html
 
-def generate_patch(files_data: List[Dict], _=None, __=None, __=None) -> str:
-    return '\n'.join(d.get('unified_diff', '') for d in files_data if d.get('unified_diff'))
+def generate_patch(files_data: List[Dict], metadata: Dict = None, diff_style: str = None, show_dates: bool = None) -> str:
+    patches = [d.get('unified_diff', '') for d in files_data if d.get('unified_diff')]
+    return '\n'.join(patches)
 
-def generate_stats(files_data: List[Dict], metadata: Dict, _=None, __=None) -> str:
+def generate_stats(files_data: List[Dict], metadata: Dict = None, diff_style: str = None, show_dates: bool = None) -> str:
     total = len(files_data)
     added = 0
     deleted = 0
@@ -452,7 +447,7 @@ def generate_stats(files_data: List[Dict], metadata: Dict, _=None, __=None) -> s
     out = f"Total archivos: {total}\nLíneas +{added} / -{deleted}\nLenguajes: " + ', '.join(f"{k}({v})" for k,v in langs.items())
     return out
 
-# ─── Procesamiento de archivos (con fechas) ───────────────────────────────
+# ─── Procesamiento de archivos ────────────────────────────────────────────
 def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line_nums: bool) -> Dict:
     path = ch['path']
     file_path = repo_root / path
@@ -460,7 +455,6 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
     original = None
     modified = None
     unified = None
-    # Obtener fechas
     local_mtime = get_local_mtime(file_path) if file_path.exists() else None
     head_mtime = get_head_mtime(repo_root, path) if status not in ('U','A') else None
     if status not in ('U','A'):
@@ -472,13 +466,11 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
             modified = get_current_content(file_path)
     if diff_style in ('unified','both') and status in ('M','A','D','R'):
         unified = get_unified_diff(repo_root, path)
-    # Compactar si se solicita
     if compact:
         if original:
             original = '\n'.join([l for l in original.splitlines() if l.strip() != ''] or [''])
         if modified and not modified.startswith("[Archivo binario"):
             modified = '\n'.join([l for l in modified.splitlines() if l.strip() != ''] or [''])
-    # Números de línea (solo si no es diff unificado)
     if line_nums and original and diff_style != 'unified':
         lines_orig = original.splitlines()
         original = '\n'.join(f"{i+1:4d}: {l}" for i,l in enumerate(lines_orig))
@@ -499,10 +491,9 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
 # ─── Función principal ────────────────────────────────────────────────────
 def main():
     repo_root = get_git_repo_root()
-    os.chdir(repo_root)  # trabajar desde la raíz
+    os.chdir(repo_root)
     print(colored(f"Repositorio: {repo_root}", Colors.CYAN))
 
-    # Cargar perfil si existe
     profile_path = repo_root / '.git_diff_simple_profile.json'
     profile = load_profile(profile_path)
     if profile and input(colored("¿Cargar perfil anterior? (s/n) [s]: ", Colors.CYAN)).strip().lower() != 'n':
@@ -510,13 +501,11 @@ def main():
     else:
         config = interactive_menu()
 
-    # Obtener todos los cambios desde la raíz
     all_changes = get_all_changes(repo_root)
     if not all_changes:
         print(colored("No hay cambios respecto a HEAD.", Colors.GREEN))
         return
 
-    # Aplicar filtros
     status_filters = config['status_filters']
     inc_ext = config['inc_ext']
     exc_pattern = config['exc_pattern']
@@ -529,7 +518,6 @@ def main():
             continue
         if exc_pattern and fnmatch.fnmatch(ch['path'], exc_pattern):
             continue
-        # Aplicar .contextignore
         context_patterns = load_contextignore(repo_root)
         if should_ignore(ch['path'], context_patterns):
             continue
@@ -541,7 +529,6 @@ def main():
 
     print(colored(f"Procesando {len(filtered)} archivos...", Colors.CYAN))
 
-    # Procesar en paralelo
     files_data = []
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(process_file, ch, repo_root, config['diff_style'], config['compact'], config['line_numbers']): ch for ch in filtered}
@@ -552,12 +539,9 @@ def main():
             for future in as_completed(futures):
                 files_data.append(future.result())
 
-    # Ordenar por fecha si se solicitó
     if config.get('sort_by_date', False):
-        # Orden descendente (más reciente primero); los que no tienen fecha van al final
         files_data.sort(key=lambda x: x.get('local_mtime') or 0, reverse=True)
 
-    # Metadatos
     metadata = {
         'generated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'system': platform.platform(),
@@ -567,7 +551,6 @@ def main():
         'last_commit': get_last_commit()
     }
 
-    # Vista previa
     if config['preview']:
         print(colored("\n=== VISTA PREVIA ===", Colors.BOLD))
         print(f"Archivos a incluir: {len(files_data)}")
@@ -580,11 +563,9 @@ def main():
         if input(colored("¿Continuar? (s/n) [s]: ", Colors.CYAN)).strip().lower() == 'n':
             return
 
-    # Crear directorio de salida
     output_dir = repo_root / 'git_diff_output'
     output_dir.mkdir(exist_ok=True)
 
-    # Calcular versión
     max_v = 0
     for f in output_dir.glob("git_diff_*.*"):
         try:
@@ -597,51 +578,50 @@ def main():
     out_files = []
     output_format = config['output_format']
     show_dates = config.get('show_dates', False)
+    diff_style = config['diff_style']
+
     if output_format == 'all':
-        for fmt in ['md','json','xml','txt','html','patch']:
+        for fmt in ['md', 'json', 'xml', 'txt', 'html', 'patch']:
             out_file = output_dir / f'git_diff_{version:03d}.{fmt}'
             if fmt == 'patch':
-                content = generate_patch(files_data, metadata, None, None)
+                content = generate_patch(files_data, metadata, diff_style, show_dates)
+            elif fmt == 'json':
+                content = generate_json(files_data, metadata, diff_style, show_dates)
+            elif fmt == 'xml':
+                content = generate_xml(files_data, metadata, diff_style, show_dates)
+            elif fmt == 'stats':
+                continue
             else:
-                # Llamar a la función de generación correspondiente con los argumentos adecuados
-                if fmt == 'json':
-                    content = generate_json(files_data, metadata, None, None)
-                elif fmt == 'xml':
-                    content = generate_xml(files_data, metadata, None, None)
-                else:
-                    # md, txt, html reciben show_dates y diff_style
-                    func = globals()[f'generate_{fmt}']
-                    content = func(files_data, metadata, config['diff_style'], show_dates)
+                func = globals()[f'generate_{fmt}']
+                content = func(files_data, metadata, diff_style, show_dates)
             with open(out_file, 'w', encoding='utf-8') as f:
                 f.write(content)
             out_files.append(str(out_file))
     elif output_format == 'stats':
-        stats = generate_stats(files_data, metadata, None, None)
+        stats = generate_stats(files_data, metadata, diff_style, show_dates)
         print(colored("\n=== ESTADÍSTICAS ===", Colors.BOLD))
         print(stats)
         return
     else:
         out_file = output_dir / f'git_diff_{version:03d}.{output_format}'
         if output_format == 'patch':
-            content = generate_patch(files_data, metadata, None, None)
+            content = generate_patch(files_data, metadata, diff_style, show_dates)
         elif output_format == 'json':
-            content = generate_json(files_data, metadata, None, None)
+            content = generate_json(files_data, metadata, diff_style, show_dates)
         elif output_format == 'xml':
-            content = generate_xml(files_data, metadata, None, None)
+            content = generate_xml(files_data, metadata, diff_style, show_dates)
         else:
             func = globals()[f'generate_{output_format}']
-            content = func(files_data, metadata, config['diff_style'], show_dates)
+            content = func(files_data, metadata, diff_style, show_dates)
         with open(out_file, 'w', encoding='utf-8') as f:
             f.write(content)
         out_files.append(str(out_file))
 
-    # Mostrar estadísticas en consola
-    stats = generate_stats(files_data, metadata, None, None)
+    stats = generate_stats(files_data, metadata, diff_style, show_dates)
     print(colored("\n=== ESTADÍSTICAS ===", Colors.BOLD))
     print(stats)
     print(colored(f"Archivos generados: {', '.join(out_files)}", Colors.GREEN))
 
-    # Copiar al portapapeles si se solicitó
     if config['clipboard'] and HAS_CLIPBOARD and out_files:
         try:
             with open(out_files[0], 'r', encoding='utf-8') as f:
