@@ -2,6 +2,7 @@
 """
 Generador de diferencias Git (HEAD vs Working Directory)
 Incluye fechas de modificación y ordenamiento por fecha.
+Por defecto ordena por fecha y no muestra vista previa.
 """
 
 import os
@@ -291,10 +292,11 @@ def interactive_menu() -> Dict:
         line_nums = input(colored("Incluir números de línea? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
     # Fechas y orden
     show_dates = input(colored("¿Mostrar fechas de modificación (local y en HEAD)? (s/n) [s]: ", Colors.CYAN)).strip().lower() != 'n'
-    sort_by_date = False
+    sort_by_date = True  # por defecto sí ordenar
     if show_dates:
-        sort_by_date = input(colored("¿Ordenar archivos por fecha de modificación local (más reciente primero)? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
-    preview = input(colored("Vista previa antes de exportar? (s/n) [s]: ", Colors.CYAN)).strip().lower() != 'n'
+        sort_by_date = input(colored("¿Ordenar archivos por fecha de modificación local (más reciente primero)? (s/n) [s]: ", Colors.CYAN)).strip().lower() != 'n'
+    # Vista previa: por defecto no
+    preview = input(colored("Vista previa antes de exportar? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
     clipboard = input(colored("Copiar al portapapeles? (requiere pyperclip) (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
     # Guardar perfil
     save = input(colored("¿Guardar esta configuración como perfil? (s/n) [n]: ", Colors.CYAN)).strip().lower() == 's'
@@ -589,9 +591,10 @@ def main():
                 content = generate_json(files_data, metadata, diff_style, show_dates)
             elif fmt == 'xml':
                 content = generate_xml(files_data, metadata, diff_style, show_dates)
-            elif fmt == 'stats':
-                continue
+            elif fmt == 'md':
+                content = generate_markdown(files_data, metadata, diff_style, show_dates)
             else:
+                # txt, html
                 func = globals()[f'generate_{fmt}']
                 content = func(files_data, metadata, diff_style, show_dates)
             with open(out_file, 'w', encoding='utf-8') as f:
@@ -610,7 +613,10 @@ def main():
             content = generate_json(files_data, metadata, diff_style, show_dates)
         elif output_format == 'xml':
             content = generate_xml(files_data, metadata, diff_style, show_dates)
+        elif output_format == 'md':
+            content = generate_markdown(files_data, metadata, diff_style, show_dates)
         else:
+            # txt, html
             func = globals()[f'generate_{output_format}']
             content = func(files_data, metadata, diff_style, show_dates)
         with open(out_file, 'w', encoding='utf-8') as f:
