@@ -2,6 +2,7 @@
 """
 Generador de diferencias Git (HEAD vs Working Directory)
 Compatible con archivos nuevos, modificados y eliminados.
+Incluye soporte para archivos untracked dentro de directorios (git status -uall).
 """
 
 import os
@@ -143,11 +144,12 @@ def format_timestamp(ts: Optional[float]) -> str:
         return "[No disponible]"
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 
-# ─── Obtener cambios desde Git (CORREGIDO: sin regex, con slicing) ────────
+# ─── Obtener cambios desde Git (con -uall) ───────────────────────────────
 def get_all_changes(repo_root: Path) -> List[Dict]:
     try:
+        # Usamos -uall para que los archivos dentro de directorios untracked aparezcan individualmente
         proc = subprocess.run(
-            ['git', 'status', '--porcelain'],
+            ['git', 'status', '--porcelain', '-uall'],
             cwd=repo_root,
             capture_output=True,
             text=True
@@ -160,7 +162,7 @@ def get_all_changes(repo_root: Path) -> List[Dict]:
         output = output.replace('\ufeff', '')
         # Mostrar diagnóstico de la salida cruda
         if output.strip():
-            print(colored("[DIAGNÓSTICO] Salida de git status --porcelain:", Colors.CYAN))
+            print(colored("[DIAGNÓSTICO] Salida de git status --porcelain -uall:", Colors.CYAN))
             for line in output.strip().splitlines():
                 print(f"  {repr(line)}")
     except Exception as e:
@@ -171,8 +173,6 @@ def get_all_changes(repo_root: Path) -> List[Dict]:
     for line in output.strip().splitlines():
         if not line:
             continue
-        # Toma los dos primeros caracteres como código de estado (pueden incluir espacios)
-        # El resto es la ruta, eliminando cualquier espacio/tabulador al inicio
         if len(line) < 3:
             continue   # línea demasiado corta
         code = line[:2]
@@ -496,7 +496,10 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
         original = get_original_content(repo_root, path)
 
     if status != 'D' and file_path.exists():
-        if is_binary_file(file_path):
+        if file_path.is_dir():
+            # Si es un directorio, no intentamos leerlo como archivo
+            modified = None
+        elif is_binary_file(file_path):
             modified = None
         else:
             modified = get_current_content(file_path)
@@ -593,6 +596,11 @@ def main():
     ignored_info = []
     for ch in all_changes:
         path = ch['path']
+        # Saltar directorios (suelen terminar con /, pero por si acaso)
+        full_path = repo_root / path
+        if full_path.is_dir():
+            ignored_info.append((path, "es un directorio, no un archivo (ignorado)"))
+            continue
         if ch['status'] not in status_filters:
             ignored_info.append((path, f"estado {ch['status']} no incluido en filtros {status_filters}"))
             continue
