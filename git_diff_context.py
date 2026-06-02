@@ -16,7 +16,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 # ─── Dependencias opcionales ───────────────────────────────────────────────
 try:
@@ -143,30 +143,42 @@ def format_timestamp(ts: Optional[float]) -> str:
         return "[No disponible]"
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 
-# ─── Obtener cambios desde Git (corregido definitivamente) ─────────────────
+# ─── Obtener cambios desde Git (con diagnóstico) ─────────────────────────
 def get_all_changes(repo_root: Path) -> List[Dict]:
     try:
-        output = subprocess.check_output(
+        # Capturamos también stderr para diagnóstico
+        proc = subprocess.run(
             ['git', 'status', '--porcelain'],
             cwd=repo_root,
-            text=True,
-            stderr=subprocess.DEVNULL
+            capture_output=True,
+            text=True
         )
-        # Eliminar cualquier BOM que pudiera venir al principio de la salida
-        output = output.lstrip('\ufeff')
-    except:
+        if proc.returncode != 0:
+            print(colored(f"Error al ejecutar git status: {proc.stderr.strip()}", Colors.FAIL))
+            return []
+        output = proc.stdout
+        # Eliminar cualquier BOM (byte order mark) en toda la cadena
+        output = output.replace('\ufeff', '')
+        # Mostrar diagnóstico de la salida cruda
+        if output.strip():
+            print(colored("[DIAGNÓSTICO] Salida de git status --porcelain:", Colors.CYAN))
+            for line in output.strip().splitlines():
+                print(f"  {repr(line)}")
+    except Exception as e:
+        print(colored(f"Excepción al ejecutar git status: {e}", Colors.FAIL))
         return []
     changes = []
     for line in output.strip().splitlines():
         if not line:
             continue
-        # Extrae los dos primeros caracteres como estado y el resto como ruta,
-        # usando regex para soportar cualquier espaciado (espacios/tabuladores)
+        # Regex para extraer los dos primeros caracteres (estado) y la ruta,
+        # aceptando cualquier espacio/tabulador como separador
         match = re.match(r'^(.{2})\s+(.*?)\s*$', line)
         if not match:
+            print(colored(f"[DIAGNÓSTICO] Línea ignorada (formato no reconocido): {repr(line)}", Colors.WARNING))
             continue
         code = match.group(1)
-        rest = match.group(2).strip()   # <-- strip() para eliminar espacios residuales
+        rest = match.group(2).strip()
         x, y = code[0], code[1]
         if y == 'M' or x == 'M':
             final = 'M'
@@ -183,8 +195,10 @@ def get_all_changes(repo_root: Path) -> List[Dict]:
         elif y == '?' and x == '?':
             final = 'U'
         else:
-            continue
-        changes.append({'path': rest, 'status': final})
+            final = None
+        if final:
+            changes.append({'path': rest, 'status': final})
+    print(colored(f"[DIAGNÓSTICO] Cambios detectados por el script: {[(c['path'], c['status']) for c in changes]}", Colors.CYAN))
     return changes
 
 def get_original_content(repo_root: Path, path: str) -> Optional[str]:
@@ -229,8 +243,7 @@ def load_contextignore(repo_root: Path) -> List[str]:
     ignore_file = repo_root / '.contextignore'
     if not ignore_file.exists():
         default = ['__pycache__/', 'node_modules/', 'dist/', 'build/', '.git/', '.idea/']
-        with open(ignore_file, 'w') as f:
-            f.write('\n'.join(default) + '\n')
+        # No lo creamos automáticamente para evitar confusiones, solo usamos la lista por defecto
         return default
     with open(ignore_file, 'r') as f:
         return [line.strip() for line in f if line.strip() and not line.startswith('#')]
@@ -565,28 +578,50 @@ def main():
     all_changes = get_all_changes(repo_root)
     if not all_changes:
         print(colored("No hay cambios respecto a HEAD.", Colors.GREEN))
+        # Diagnóstico extra: si git status no devolvió nada pero no dio error, informamos
         return
 
-    # Filtrar cambios
+    # Cargar patrones de ignorados para diagnóstico
+    context_patterns = load_contextignore(repo_root)
+    print(colored(f"[DIAGNÓSTICO] Patrones .contextignore: {context_patterns}", Colors.CYAN))
+
+    # Filtrar cambios con registro de motivos de descarte
     status_filters = config['status_filters']
     inc_ext = config['inc_ext']
     exc_pattern = config['exc_pattern']
     filtered = []
+    ignored_info = []  # (path, motivo)
     for ch in all_changes:
+        path = ch['path']
+        # Estado
         if ch['status'] not in status_filters:
+            ignored_info.append((path, f"estado {ch['status']} no incluido en filtros {status_filters}"))
             continue
-        ext = os.path.splitext(ch['path'])[1].lower()
+        # Extensión
+        ext = os.path.splitext(path)[1].lower()
         if inc_ext and ext not in inc_ext:
+            ignored_info.append((path, f"extensión {ext} no incluida en {inc_ext}"))
             continue
-        if exc_pattern and fnmatch.fnmatch(ch['path'], exc_pattern):
+        # Patrón de exclusión
+        if exc_pattern and fnmatch.fnmatch(path, exc_pattern):
+            ignored_info.append((path, f"coincide con patrón de exclusión '{exc_pattern}'"))
             continue
-        context_patterns = load_contextignore(repo_root)
-        if should_ignore(ch['path'], context_patterns):
+        # .contextignore
+        if should_ignore(path, context_patterns):
+            ignored_info.append((path, f"ignorado por .contextignore (coincide con algún patrón)"))
             continue
         filtered.append(ch)
 
+    # Mostrar ignorados si hay
+    if ignored_info:
+        print(colored("\n[DIAGNÓSTICO] Archivos ignorados por filtros:", Colors.WARNING))
+        for p, motivo in ignored_info:
+            print(f"  - {p}: {motivo}")
+
     if not filtered:
         print(colored("No hay archivos que cumplan los filtros.", Colors.WARNING))
+        if all_changes:
+            print(colored("Todos los cambios fueron descartados (ver diagnóstico arriba).", Colors.WARNING))
         return
 
     print(colored(f"Procesando {len(filtered)} archivos...", Colors.CYAN))
