@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 import platform
 import getpass
 import fnmatch
+import re
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -142,7 +143,7 @@ def format_timestamp(ts: Optional[float]) -> str:
         return "[No disponible]"
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 
-# ─── Obtener cambios desde Git ───────────────────────────────────────────
+# ─── Obtener cambios desde Git (corregido) ──────────────────────────────
 def get_all_changes(repo_root: Path) -> List[Dict]:
     try:
         output = subprocess.check_output(
@@ -157,8 +158,13 @@ def get_all_changes(repo_root: Path) -> List[Dict]:
     for line in output.strip().splitlines():
         if not line:
             continue
-        code = line[:2]
-        rest = line[3:].strip()
+        # Extrae los dos primeros caracteres como estado y el resto como ruta,
+        # usando regex para soportar cualquier espaciado (espacios/tabuladores)
+        match = re.match(r'^(.{2})\s+(.*?)\s*$', line)
+        if not match:
+            continue
+        code = match.group(1)
+        rest = match.group(2)
         x, y = code[0], code[1]
         if y == 'M' or x == 'M':
             final = 'M'
