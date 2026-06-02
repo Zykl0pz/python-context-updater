@@ -143,7 +143,7 @@ def format_timestamp(ts: Optional[float]) -> str:
         return "[No disponible]"
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 
-# ─── Obtener cambios desde Git (corregido) ──────────────────────────────
+# ─── Obtener cambios desde Git (corregido definitivamente) ─────────────────
 def get_all_changes(repo_root: Path) -> List[Dict]:
     try:
         output = subprocess.check_output(
@@ -152,6 +152,8 @@ def get_all_changes(repo_root: Path) -> List[Dict]:
             text=True,
             stderr=subprocess.DEVNULL
         )
+        # Eliminar cualquier BOM que pudiera venir al principio de la salida
+        output = output.lstrip('\ufeff')
     except:
         return []
     changes = []
@@ -164,7 +166,7 @@ def get_all_changes(repo_root: Path) -> List[Dict]:
         if not match:
             continue
         code = match.group(1)
-        rest = match.group(2)
+        rest = match.group(2).strip()   # <-- strip() para eliminar espacios residuales
         x, y = code[0], code[1]
         if y == 'M' or x == 'M':
             final = 'M'
