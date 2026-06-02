@@ -103,11 +103,15 @@ SPECIAL_ENV_NAMES = {'.env', '.env.example', '.env.local', '.env.development', '
 # Archivos de ignorados que queremos incluir explícitamente
 SPECIAL_IGNORE_FILES = {'.gitignore', '.contextignore', '.dockerignore', '.eslintignore', '.prettierignore', '.npmignore'}
 
-# ─── Directorios ignorados por defecto ─────────────────────────────────────
+# ─── Directorios ignorados por defecto (SIEMPRE, inamovible) ──────────────
 DEFAULT_IGNORED_DIRS = {
     '__pycache__', 'node_modules', 'dist', 'out', 'build',
     'venv', 'env', '.git', '.svn', '.hg', '.idea', '.vscode', 'vendor', 'samples', 'old'
 }
+
+def is_always_ignored_dir(dirname):
+    """Devuelve True si el directorio debe ignorarse siempre, sin importar .contextignore."""
+    return dirname in DEFAULT_IGNORED_DIRS
 
 # ─── Utilidades de formato y archivos ──────────────────────────────────────
 def format_size(size_bytes):
@@ -197,7 +201,8 @@ def should_ignore_by_contextignore(rel_path, patterns):
                 return True
     return False
 
-def should_ignore_dir_basic(dirname):
+def should_ignore_hidden_dir(dirname):
+    """Solo ignora directorios que empiezan con '.' (útil para ocultos)."""
     return dirname.startswith('.')
 
 # ─── Lectura de formatos especiales ────────────────────────────────────────
@@ -440,20 +445,14 @@ def read_file_content(filepath):
             return f"[No se pudo leer el archivo: {str(e)}]"
 
 # ─── Árbol de directorios ──────────────────────────────────────────────────
-def generate_directory_tree(start_path='.', context_patterns=None, git_spec=None, include_all=False):
+def generate_directory_tree(start_path='.', context_patterns=None, git_spec=None, show_hidden=False):
     """
     Genera el árbol de directorios.
-    Si include_all=True, ignora .contextignore, .gitignore y muestra archivos/carpetas ocultos.
+    - show_hidden: si es True, muestra archivos/carpetas ocultos (que empiezan con '.'),
+                   pero NUNCA muestra los directorios de dependencias fijas (DEFAULT_IGNORED_DIRS).
     """
     lines = []
     lines.append(start_path)
-
-    if include_all:
-        context_patterns = []
-        git_spec = None
-        skip_hidden_check = True
-    else:
-        skip_hidden_check = False
 
     def walk_dir(current_path, prefix=""):
         try:
@@ -465,16 +464,26 @@ def generate_directory_tree(start_path='.', context_patterns=None, git_spec=None
         for item in items:
             full = os.path.join(current_path, item)
             rel = os.path.relpath(full, start_path)
-            if git_spec and not include_all and is_ignored_by_gitignore(rel, git_spec):
+
+            # 1. Ignorar SIEMPRE los directorios de dependencias fijas
+            if os.path.isdir(full) and is_always_ignored_dir(item):
                 continue
+
+            # 2. Aplicar .gitignore si existe y no estamos mostrando ocultos forzadamente
+            if git_spec and not show_hidden and is_ignored_by_gitignore(rel, git_spec):
+                continue
+
             if os.path.isdir(full):
-                if not skip_hidden_check and should_ignore_dir_basic(item):
+                # 3. Ocultos (punto) solo se ignoran si show_hidden=False
+                if not show_hidden and should_ignore_hidden_dir(item):
                     continue
-                if not include_all and should_ignore_by_contextignore(rel + '/', context_patterns):
+                # 4. .contextignore solo si no estamos mostrando todo (show_hidden no anula contextignore)
+                if not show_hidden and should_ignore_by_contextignore(rel + '/', context_patterns):
                     continue
                 dirs.append(item)
             else:
                 files.append(item)
+
         dirs.sort()
         files.sort()
         for i, d in enumerate(dirs):
@@ -505,7 +514,7 @@ def is_ignored_by_gitignore(rel_path, spec):
 def get_available_extensions():
     extensions = set()
     for root, dirs, files in os.walk('.', followlinks=False):
-        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        dirs[:] = [d for d in dirs if not should_ignore_hidden_dir(d) and not is_always_ignored_dir(d)]
         for filename in files:
             filepath = os.path.join(root, filename)
             if os.path.isfile(filepath) and not os.path.islink(filepath):
@@ -572,8 +581,8 @@ def prompt_line_numbers():
     resp = input(colored("¿Incluir números de línea? (s/n) [n]: ", Colors.CYAN)).strip().lower()
     return resp == 's' or resp == 'si'
 
-def prompt_show_all_in_tree():
-    resp = input(colored("¿Mostrar en el árbol de directorios TODOS los archivos/carpetas (incluyendo ignorados y ocultos)? (s/n) [s]: ", Colors.CYAN)).strip().lower()
+def prompt_show_hidden_in_tree():
+    resp = input(colored("¿Mostrar archivos y carpetas ocultos (que empiezan con '.') en el árbol? (s/n) [s]: ", Colors.CYAN)).strip().lower()
     return resp not in ('n', 'no')
 
 def select_output_format():
@@ -790,7 +799,7 @@ def main():
         line_numbers = profile.get('line_numbers', False)
         include_pat = profile.get('include_pat')
         exclude_pat = profile.get('exclude_pat')
-        show_all_in_tree = profile.get('show_all_in_tree', True)
+        show_hidden_in_tree = profile.get('show_hidden_in_tree', True)
         print(colored("Perfil cargado.", Colors.GREEN))
     else:
         selected_extensions = select_extensions_interactively()
@@ -801,7 +810,7 @@ def main():
         include_pat, exclude_pat = prompt_include_exclude()
         compact_flag = prompt_compact_mode()
         line_numbers = prompt_line_numbers() if output_format in ('md', 'all') else False
-        show_all_in_tree = prompt_show_all_in_tree()
+        show_hidden_in_tree = prompt_show_hidden_in_tree()
         profile = {
             'extensions': selected_extensions,
             'format': output_format,
@@ -809,7 +818,7 @@ def main():
             'line_numbers': line_numbers,
             'include_pat': include_pat,
             'exclude_pat': exclude_pat,
-            'show_all_in_tree': show_all_in_tree
+            'show_hidden_in_tree': show_hidden_in_tree
         }
         if prompt_save_profile():
             save_profile(profile)
@@ -826,16 +835,19 @@ def main():
         except Exception as e:
             logger.warning(f"No se pudo procesar .gitignore: {e}")
 
-    # Generar árbol según preferencia
-    logger.info(colored(f"Generando árbol de directorios (include_all={show_all_in_tree})...", Colors.CYAN))
-    tree_text = generate_directory_tree('.', context_patterns, git_spec, include_all=show_all_in_tree)
+    # Generar árbol según preferencia de ocultos (pero NUNCA dependencias fijas)
+    logger.info(colored(f"Generando árbol de directorios (mostrar ocultos={show_hidden_in_tree})...", Colors.CYAN))
+    tree_text = generate_directory_tree('.', context_patterns, git_spec, show_hidden=show_hidden_in_tree)
 
-    # Buscar archivos con filtros (ESTA PARTE SÍ RESPETA .contextignore, .gitignore y ocultos)
+    # Buscar archivos con filtros (ESTA PARTE SÍ RESPETA SIEMPRE LAS DEPENDENCIAS FIJAS)
     file_list = []
     for root, dirs, files in os.walk('.', followlinks=False):
-        dirs[:] = [d for d in dirs if not should_ignore_dir_basic(d) and
-                   not should_ignore_by_contextignore(os.path.relpath(os.path.join(root, d), '.') + '/', context_patterns) and
-                   not (git_spec and is_ignored_by_gitignore(os.path.relpath(os.path.join(root, d), '.'), git_spec))]
+        # Filtrar directorios: primero los siempre ignorados, luego ocultos, luego contextignore, luego gitignore
+        dirs[:] = [d for d in dirs
+                   if not is_always_ignored_dir(d)
+                   and not should_ignore_hidden_dir(d)
+                   and not should_ignore_by_contextignore(os.path.relpath(os.path.join(root, d), '.') + '/', context_patterns)
+                   and not (git_spec and is_ignored_by_gitignore(os.path.relpath(os.path.join(root, d), '.'), git_spec))]
         for filename in files:
             filepath = os.path.join(root, filename)
             if os.path.islink(filepath):
@@ -845,6 +857,7 @@ def main():
                 continue
             if should_ignore_by_contextignore(rel, context_patterns):
                 continue
+            # Archivos ocultos (punto) no se ignoran aquí, se pueden incluir si el usuario quiere
             _, ext = os.path.splitext(filename)
             ext = ext.lower()
             # Casos especiales: .env y archivos de ignorados
