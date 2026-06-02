@@ -503,8 +503,20 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
     else:
         modified = None
 
-    if diff_style in ('unified','both') and status in ('M','A','D','R'):
-        unified = get_unified_diff(repo_root, path)
+    # Generar diff unificado (incluyendo untracked)
+    if diff_style in ('unified','both'):
+        if status in ('M','A','D','R'):
+            unified = get_unified_diff(repo_root, path)
+        elif status == 'U' and modified is not None:
+            # Diff artificial: comparar con /dev/null (archivo añadido completo)
+            lines = modified.splitlines()
+            if lines:
+                diff_lines = [f"--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{len(lines)} @@\n"]
+                for line in lines:
+                    diff_lines.append(f"+{line}\n")
+                unified = ''.join(diff_lines)
+            else:
+                unified = f"--- /dev/null\n+++ b/{path}\n@@ -0,0 +0,0 @@\n"
 
     if compact:
         if original and isinstance(original, str):
