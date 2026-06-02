@@ -16,7 +16,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 
 # ─── Dependencias opcionales ───────────────────────────────────────────────
 try:
@@ -143,10 +143,9 @@ def format_timestamp(ts: Optional[float]) -> str:
         return "[No disponible]"
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 
-# ─── Obtener cambios desde Git (con diagnóstico) ─────────────────────────
+# ─── Obtener cambios desde Git (CORREGIDO: sin regex, con slicing) ────────
 def get_all_changes(repo_root: Path) -> List[Dict]:
     try:
-        # Capturamos también stderr para diagnóstico
         proc = subprocess.run(
             ['git', 'status', '--porcelain'],
             cwd=repo_root,
@@ -157,7 +156,7 @@ def get_all_changes(repo_root: Path) -> List[Dict]:
             print(colored(f"Error al ejecutar git status: {proc.stderr.strip()}", Colors.FAIL))
             return []
         output = proc.stdout
-        # Eliminar cualquier BOM (byte order mark) en toda la cadena
+        # Eliminar cualquier BOM (byte order mark)
         output = output.replace('\ufeff', '')
         # Mostrar diagnóstico de la salida cruda
         if output.strip():
@@ -167,18 +166,17 @@ def get_all_changes(repo_root: Path) -> List[Dict]:
     except Exception as e:
         print(colored(f"Excepción al ejecutar git status: {e}", Colors.FAIL))
         return []
+    
     changes = []
     for line in output.strip().splitlines():
         if not line:
             continue
-        # Regex para extraer los dos primeros caracteres (estado) y la ruta,
-        # aceptando cualquier espacio/tabulador como separador
-        match = re.match(r'^(.{2})\s+(.*?)\s*$', line)
-        if not match:
-            print(colored(f"[DIAGNÓSTICO] Línea ignorada (formato no reconocido): {repr(line)}", Colors.WARNING))
-            continue
-        code = match.group(1)
-        rest = match.group(2).strip()
+        # Toma los dos primeros caracteres como código de estado (pueden incluir espacios)
+        # El resto es la ruta, eliminando cualquier espacio/tabulador al inicio
+        if len(line) < 3:
+            continue   # línea demasiado corta
+        code = line[:2]
+        rest = line[2:].lstrip()   # quita espacios/tabuladores antes del nombre del archivo
         x, y = code[0], code[1]
         if y == 'M' or x == 'M':
             final = 'M'
@@ -243,7 +241,6 @@ def load_contextignore(repo_root: Path) -> List[str]:
     ignore_file = repo_root / '.contextignore'
     if not ignore_file.exists():
         default = ['__pycache__/', 'node_modules/', 'dist/', 'build/', '.git/', '.idea/']
-        # No lo creamos automáticamente para evitar confusiones, solo usamos la lista por defecto
         return default
     with open(ignore_file, 'r') as f:
         return [line.strip() for line in f if line.strip() and not line.startswith('#')]
@@ -327,7 +324,7 @@ def interactive_menu() -> Dict:
         save_profile(Path.cwd() / '.git_diff_simple_profile.json', config)
     return config
 
-# ─── Generación de salidas (todas las funciones necesarias) ──────────────
+# ─── Generación de salidas ───────────────────────────────────────────────
 def escape_html(text: str) -> str:
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
@@ -483,7 +480,7 @@ def generate_stats(files_data: List[Dict], metadata: Dict = None, diff_style: st
     out = f"Total archivos: {total}\nLíneas +{added} / -{deleted}\nLenguajes: " + ', '.join(f"{k}({v})" for k,v in langs.items())
     return out
 
-# ─── Procesamiento de archivos (robusto) ─────────────────────────────────
+# ─── Procesamiento de archivos ───────────────────────────────────────────
 def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line_nums: bool) -> Dict:
     path = ch['path']
     file_path = repo_root / path
@@ -492,15 +489,12 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
     modified = None
     unified = None
 
-    # Fechas
     local_mtime = get_local_mtime(file_path) if file_path.exists() else None
     head_mtime = get_head_mtime(repo_root, path) if status not in ('U','A') else None
 
-    # Contenido original (solo si existe en HEAD)
     if status not in ('U', 'A'):
         original = get_original_content(repo_root, path)
 
-    # Contenido modificado (si el archivo existe en WD)
     if status != 'D' and file_path.exists():
         if is_binary_file(file_path):
             modified = None
@@ -509,11 +503,9 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
     else:
         modified = None
 
-    # Diff unificado
     if diff_style in ('unified','both') and status in ('M','A','D','R'):
         unified = get_unified_diff(repo_root, path)
 
-    # Modo compacto
     if compact:
         if original and isinstance(original, str):
             lines = original.splitlines()
@@ -542,7 +534,6 @@ def process_file(ch: Dict, repo_root: Path, diff_style: str, compact: bool, line
                     prev_empty = False
             modified = '\n'.join(compacted)
 
-    # Números de línea
     if line_nums and diff_style != 'unified':
         if original and isinstance(original, str):
             lines = original.splitlines()
@@ -578,41 +569,33 @@ def main():
     all_changes = get_all_changes(repo_root)
     if not all_changes:
         print(colored("No hay cambios respecto a HEAD.", Colors.GREEN))
-        # Diagnóstico extra: si git status no devolvió nada pero no dio error, informamos
         return
 
-    # Cargar patrones de ignorados para diagnóstico
     context_patterns = load_contextignore(repo_root)
     print(colored(f"[DIAGNÓSTICO] Patrones .contextignore: {context_patterns}", Colors.CYAN))
 
-    # Filtrar cambios con registro de motivos de descarte
     status_filters = config['status_filters']
     inc_ext = config['inc_ext']
     exc_pattern = config['exc_pattern']
     filtered = []
-    ignored_info = []  # (path, motivo)
+    ignored_info = []
     for ch in all_changes:
         path = ch['path']
-        # Estado
         if ch['status'] not in status_filters:
             ignored_info.append((path, f"estado {ch['status']} no incluido en filtros {status_filters}"))
             continue
-        # Extensión
         ext = os.path.splitext(path)[1].lower()
         if inc_ext and ext not in inc_ext:
             ignored_info.append((path, f"extensión {ext} no incluida en {inc_ext}"))
             continue
-        # Patrón de exclusión
         if exc_pattern and fnmatch.fnmatch(path, exc_pattern):
             ignored_info.append((path, f"coincide con patrón de exclusión '{exc_pattern}'"))
             continue
-        # .contextignore
         if should_ignore(path, context_patterns):
-            ignored_info.append((path, f"ignorado por .contextignore (coincide con algún patrón)"))
+            ignored_info.append((path, "ignorado por .contextignore"))
             continue
         filtered.append(ch)
 
-    # Mostrar ignorados si hay
     if ignored_info:
         print(colored("\n[DIAGNÓSTICO] Archivos ignorados por filtros:", Colors.WARNING))
         for p, motivo in ignored_info:
@@ -626,7 +609,6 @@ def main():
 
     print(colored(f"Procesando {len(filtered)} archivos...", Colors.CYAN))
 
-    # Procesamiento paralelo
     files_data = []
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(process_file, ch, repo_root, config['diff_style'], config['compact'], config['line_numbers']): ch for ch in filtered}
@@ -637,11 +619,9 @@ def main():
             for future in as_completed(futures):
                 files_data.append(future.result())
 
-    # Ordenar por fecha si se pidió
     if config.get('sort_by_date', False):
         files_data.sort(key=lambda x: x.get('local_mtime') or 0, reverse=True)
 
-    # Metadatos
     metadata = {
         'generated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'system': platform.platform(),
@@ -651,7 +631,6 @@ def main():
         'last_commit': get_last_commit()
     }
 
-    # Vista previa
     if config['preview']:
         print(colored("\n=== VISTA PREVIA ===", Colors.BOLD))
         print(f"Archivos a incluir: {len(files_data)}")
@@ -664,11 +643,9 @@ def main():
         if input(colored("¿Continuar? (s/n) [s]: ", Colors.CYAN)).strip().lower() == 'n':
             return
 
-    # Crear directorio de salida
     output_dir = repo_root / 'git_diff_output'
     output_dir.mkdir(exist_ok=True)
 
-    # Calcular versión
     max_v = 0
     for f in output_dir.glob("git_diff_*.*"):
         try:
@@ -722,13 +699,11 @@ def main():
             f.write(content)
         out_files.append(str(out_file))
 
-    # Mostrar estadísticas en consola
     stats = generate_stats(files_data, metadata, diff_style, show_dates)
     print(colored("\n=== ESTADÍSTICAS ===", Colors.BOLD))
     print(stats)
     print(colored(f"Archivos generados: {', '.join(out_files)}", Colors.GREEN))
 
-    # Copiar al portapapeles si se pidió
     if config['clipboard'] and HAS_CLIPBOARD and out_files:
         try:
             with open(out_files[0], 'r', encoding='utf-8') as f:
