@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Inventario Forense Completo + Árbol de Directorios.
+Inventario Forense Completo + Árbol de Directorios (sin bloqueos en Windows).
 Extrae: hardware (CPU, RAM, discos SMART, batería, monitor), SO, kernel,
 red (WiFi, proxy, firewall), paquetes (30+ gestores), procesos, usuarios,
 logs, historiales de shell, persistencia, certificados, impresoras,
@@ -83,7 +83,7 @@ logger.addHandler(fh)
 logger.addHandler(ch)
 
 # ─── Utilidades generales ──────────────────────────────────────────────────
-def run_command(cmd: str, shell: bool = True, timeout: int = 60) -> Tuple[str, str, int]:
+def run_command(cmd: str, shell: bool = True, timeout: int = 30) -> Tuple[str, str, int]:
     try:
         result = subprocess.run(cmd, shell=shell, capture_output=True, text=True, timeout=timeout)
         return result.stdout.strip(), result.stderr.strip(), result.returncode
@@ -107,11 +107,26 @@ def get_os() -> str:
         return 'unknown'
 
 def run_powershell(command: str) -> Optional[str]:
+    """Ejecuta un comando de PowerShell en Windows sin interacción."""
     if get_os() != 'windows':
         return None
-    full_cmd = f'powershell -NoProfile -Command "{command}"'
-    out, err, code = run_command(full_cmd, timeout=120)
-    return out if code == 0 else None
+    full_cmd = f'powershell -NoProfile -NonInteractive -Command "{command}"'
+    try:
+        result = subprocess.run(
+            full_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Timeout en PowerShell: {command[:100]}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error en PowerShell: {e}")
+        return None
 
 def read_file_if_exists(path: str) -> Optional[str]:
     if os.path.isfile(path):
@@ -129,7 +144,7 @@ def format_size(size_bytes):
         size_bytes /= 1024.0
     return f"{size_bytes:.1f} PB"
 
-# ─── Funciones de árbol de directorios (adaptadas de context.py) ──────────
+# ─── Funciones de árbol de directorios ──────────────────────────────────
 DEFAULT_IGNORED_DIRS = {
     '__pycache__', 'node_modules', 'dist', 'out', 'build',
     'venv', 'env', '.git', '.svn', '.hg', '.idea', '.vscode', 'vendor', 'samples', 'old'
@@ -142,12 +157,6 @@ def should_ignore_hidden_dir(dirname):
     return dirname.startswith('.')
 
 def generate_directory_tree(start_path='.', show_hidden=True, max_depth=10):
-    """
-    Genera un árbol de directorios recursivo.
-    - start_path: directorio raíz.
-    - show_hidden: si incluir archivos/carpetas ocultos (punto).
-    - max_depth: profundidad máxima para evitar bucles.
-    """
     lines = []
     lines.append(os.path.abspath(start_path))
 
@@ -163,10 +172,8 @@ def generate_directory_tree(start_path='.', show_hidden=True, max_depth=10):
         dirs, files = [], []
         for item in items:
             full = os.path.join(current_path, item)
-            # Ignorar siempre directorios de dependencias
             if os.path.isdir(full) and is_always_ignored_dir(item):
                 continue
-            # Ocultos
             if not show_hidden and should_ignore_hidden_dir(item):
                 continue
             if os.path.isdir(full):
@@ -525,7 +532,7 @@ def windows_vscode_extensions():
 def windows_powershell_modules():
     if get_os() != 'windows':
         return None
-    out = run_powershell("Get-InstalledModule | Select-Object -Property Name,Version | Format-List")
+    out = run_powershell("Get-InstalledModule -ErrorAction SilentlyContinue | Select-Object -Property Name,Version | Format-List")
     if out:
         modules = []
         for line in out.splitlines():
@@ -541,7 +548,7 @@ def windows_powershell_modules():
 def windows_features():
     if get_os() != 'windows':
         return None
-    out = run_powershell("Get-WindowsOptionalFeature -Online | Where-Object {$_.State -eq 'Enabled'} | Select-Object FeatureName")
+    out = run_powershell("Get-WindowsOptionalFeature -Online -ErrorAction SilentlyContinue | Where-Object {$_.State -eq 'Enabled'} | Select-Object FeatureName")
     if out:
         lines = [line.strip() for line in out.splitlines() if line.strip() and not line.startswith("FeatureName")]
         return "\n".join(sorted(lines)) if lines else None
@@ -650,7 +657,6 @@ def generic_cargo():
     return None
 
 def get_complete_package_list() -> Dict[str, Any]:
-    """Recopila la lista de paquetes de TODOS los gestores soportados."""
     packages = {}
     os_type = get_os()
     if os_type == 'linux':
@@ -681,7 +687,6 @@ def get_complete_package_list() -> Dict[str, Any]:
         packages['vscode_extensions'] = windows_vscode_extensions()
         packages['powershell_modules'] = windows_powershell_modules()
         packages['windows_features'] = windows_features()
-    # Multiplataforma
     packages['asdf'] = generic_asdf()
     packages['nix'] = generic_nix()
     packages['guix'] = generic_guix()
@@ -692,7 +697,7 @@ def get_complete_package_list() -> Dict[str, Any]:
     return packages
 
 # ==========================================================================
-# SECCIÓN 2: FUNCIONES DE INFORMACIÓN DEL SISTEMA
+# SECCIÓN 2: INFORMACIÓN DEL SISTEMA
 # ==========================================================================
 
 def get_system_info() -> Dict[str, Any]:
@@ -750,13 +755,12 @@ def get_system_info() -> Dict[str, Any]:
     return info
 
 # ==========================================================================
-# SECCIÓN 3: FUNCIONES DE HARDWARE (CPU, RAM, DISCOS SMART, etc.)
+# SECCIÓN 3: HARDWARE
 # ==========================================================================
 
 def get_hardware_info() -> Dict[str, Any]:
     hw = {}
     os_type = get_os()
-    # CPU
     cpu = {}
     if HAS_PSUTIL:
         cpu['physical_cores'] = psutil.cpu_count(logical=False)
@@ -789,7 +793,6 @@ def get_hardware_info() -> Dict[str, Any]:
             cpu['model'] = out.split(':', 1)[1].strip()
     hw['cpu'] = cpu
 
-    # RAM
     mem = {}
     if HAS_PSUTIL:
         mem['total'] = psutil.virtual_memory().total
@@ -809,7 +812,6 @@ def get_hardware_info() -> Dict[str, Any]:
             mem['wmic_memory'] = out
     hw['memory'] = mem
 
-    # Motherboard y BIOS
     mobo = {}
     if os_type == 'linux' and command_exists('dmidecode'):
         out, _, _ = run_command('sudo dmidecode -t baseboard 2>/dev/null')
@@ -834,7 +836,6 @@ def get_hardware_info() -> Dict[str, Any]:
             mobo['system_profiler_hardware'] = out
     hw['motherboard'] = mobo
 
-    # Discos
     disks = []
     if HAS_PSUTIL:
         for part in psutil.disk_partitions():
@@ -855,7 +856,6 @@ def get_hardware_info() -> Dict[str, Any]:
             disks.append(disk)
     hw['disk_partitions'] = disks
 
-    # Discos físicos con SMART
     physical_disks = []
     if os_type == 'linux':
         out, _, _ = run_command('lsblk -o NAME,SIZE,MODEL,SERIAL,TYPE /dev/sd* /dev/nvme* 2>/dev/null')
@@ -893,11 +893,10 @@ def get_hardware_info() -> Dict[str, Any]:
                     disk_info['smart_attributes'] = attr
                     physical_disks.append(disk_info)
     elif os_type == 'windows':
-        ps_cmd = "Get-PhysicalDisk | Select-Object DeviceID, MediaType, Model, SerialNumber, Size, OperationalStatus | ConvertTo-Json"
-        out = run_powershell(ps_cmd)
-        if out:
+        ps = run_powershell("Get-PhysicalDisk -ErrorAction SilentlyContinue | Select-Object DeviceID, MediaType, Model, SerialNumber, Size, OperationalStatus | ConvertTo-Json")
+        if ps:
             try:
-                disk_data = json.loads(out)
+                disk_data = json.loads(ps)
                 physical_disks.append({'powerShell_physical_disk': disk_data})
             except:
                 pass
@@ -918,7 +917,6 @@ def get_hardware_info() -> Dict[str, Any]:
                     physical_disks.append(disk_info)
     hw['physical_disks'] = physical_disks
 
-    # GPU
     gpu = {}
     if os_type == 'linux':
         out, _, _ = run_command('lspci -v | grep -i "VGA" -A 10')
@@ -938,7 +936,6 @@ def get_hardware_info() -> Dict[str, Any]:
             gpu['system_profiler_display'] = out
     hw['gpu'] = gpu
 
-    # Periféricos
     perif = {}
     if os_type == 'linux':
         out, _, _ = run_command('lsusb -v 2>/dev/null')
@@ -953,7 +950,6 @@ def get_hardware_info() -> Dict[str, Any]:
             perif['wmic_usb'] = out
     hw['peripherals'] = perif
 
-    # Sensores
     sensors = {}
     if os_type == 'linux':
         if command_exists('sensors'):
@@ -961,11 +957,10 @@ def get_hardware_info() -> Dict[str, Any]:
             if out:
                 sensors['sensors'] = out
     hw['sensors'] = sensors
-
     return hw
 
 # ==========================================================================
-# SECCIÓN 4: FUNCIONES FORENSES ADICIONALES (batería, monitor, etc.)
+# SECCIÓN 4: FUNCIONES FORENSES ADICIONALES (corregidas)
 # ==========================================================================
 
 def get_battery_info() -> Dict[str, Any]:
@@ -982,7 +977,7 @@ def get_battery_info() -> Dict[str, Any]:
             if energy_now and battery.get('energy_full'):
                 battery['health_percent'] = f"{int(energy_now) / int(battery['energy_full']) * 100:.1f}%"
     elif os_type == 'windows':
-        ps = run_powershell("Get-WmiObject Win32_Battery | Select-Object Name, Manufacturer, SerialNumber, Chemistry, DesignCapacity, FullChargeCapacity, CycleCount, EstimatedChargeRemaining | ConvertTo-Json")
+        ps = run_powershell("Get-WmiObject Win32_Battery -ErrorAction SilentlyContinue | Select-Object Name, Manufacturer, SerialNumber, Chemistry, DesignCapacity, FullChargeCapacity, CycleCount, EstimatedChargeRemaining | ConvertTo-Json")
         if ps:
             try:
                 battery['wmi'] = json.loads(ps)
@@ -1016,7 +1011,7 @@ def get_monitor_info() -> Dict[str, Any]:
             except:
                 pass
     elif os_type == 'windows':
-        ps = run_powershell("Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorID | Select-Object SerialNumberID, ProductCodeID, WeekOfManufacture, YearOfManufacture | ConvertTo-Json")
+        ps = run_powershell("Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue | Select-Object SerialNumberID, ProductCodeID, WeekOfManufacture, YearOfManufacture | ConvertTo-Json")
         if ps:
             try:
                 monitor['wmi_edid'] = json.loads(ps)
@@ -1045,7 +1040,7 @@ def get_firewall_info() -> Dict[str, Any]:
             if out:
                 fw['ufw'] = out
     elif os_type == 'windows':
-        ps = run_powershell("Get-NetFirewallProfile | Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction | ConvertTo-Json")
+        ps = run_powershell("Get-NetFirewallProfile -ErrorAction SilentlyContinue | Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction | ConvertTo-Json")
         if ps:
             fw['firewall_profiles'] = ps
         out, _, _ = run_command("netsh advfirewall show allprofiles")
@@ -1072,7 +1067,7 @@ def get_updates_info() -> Dict[str, Any]:
         out, _, _ = run_command("wmic qfe list brief /format:csv")
         if out:
             updates['wmic_hotfixes'] = out
-        ps = run_powershell("Get-HotFix | Select-Object HotFixID, InstalledOn, Description | ConvertTo-Json")
+        ps = run_powershell("Get-HotFix -ErrorAction SilentlyContinue | Select-Object HotFixID, InstalledOn, Description | ConvertTo-Json")
         if ps:
             updates['hotfixes'] = ps
     elif os_type == 'macos':
@@ -1095,12 +1090,18 @@ def get_usb_history() -> Dict[str, Any]:
         if out:
             usb['lsusb_detail'] = out
     elif os_type == 'windows':
-        ps = run_powershell("Get-WmiObject Win32_USBControllerDevice | ForEach-Object { $_.Dependent } | Get-WmiObject -Namespace root\\cimv2 | Select-Object PNPDeviceID, Service, Name | ConvertTo-Json")
+        ps = run_powershell("Get-PnpDevice -Class USB -ErrorAction SilentlyContinue | Select-Object FriendlyName, InstanceId, Status | ConvertTo-Json")
         if ps:
-            usb['wmi_usb'] = ps
-        ps = run_powershell("Get-EventLog -LogName System -Source 'Microsoft-Windows-Kernel-PnP' -Newest 50 | Select-Object TimeGenerated, Message")
+            try:
+                usb['pnp_usb_devices'] = json.loads(ps)
+            except:
+                usb['pnp_usb_raw'] = ps
+        ps = run_powershell("Get-EventLog -LogName System -Source 'Microsoft-Windows-Kernel-PnP' -Newest 50 -ErrorAction SilentlyContinue | Select-Object TimeGenerated, Message | ConvertTo-Json")
         if ps:
-            usb['pnp_events'] = ps
+            try:
+                usb['pnp_events'] = json.loads(ps)
+            except:
+                usb['pnp_events_raw'] = ps
     elif os_type == 'macos':
         out, _, _ = run_command("system_profiler SPUSBDataType")
         if out:
@@ -1124,7 +1125,7 @@ def get_kernel_modules() -> Dict[str, Any]:
         out, _, _ = run_command("driverquery /v /fo csv")
         if out:
             mods['driverquery'] = out
-        ps = run_powershell("Get-WmiObject Win32_PnPSignedDriver | Select-Object DeviceName, DriverVersion, Manufacturer | ConvertTo-Json")
+        ps = run_powershell("Get-WmiObject Win32_PnPSignedDriver -ErrorAction SilentlyContinue | Select-Object DeviceName, DriverVersion, Manufacturer | ConvertTo-Json")
         if ps:
             mods['pnp_drivers'] = ps
     elif os_type == 'macos':
@@ -1147,10 +1148,10 @@ def get_secureboot_tpm() -> Dict[str, Any]:
             if tpm_version:
                 st['tpm_version'] = tpm_version
     elif os_type == 'windows':
-        ps = run_powershell("Confirm-SecureBootUEFI")
+        ps = run_powershell("Confirm-SecureBootUEFI -ErrorAction SilentlyContinue")
         if ps:
             st['secure_boot'] = ps.strip()
-        ps = run_powershell("Get-Tpm | Select-Object TpmReady, TpmPresent, TpmVersion | ConvertTo-Json")
+        ps = run_powershell("Get-Tpm -ErrorAction SilentlyContinue | Select-Object TpmReady, TpmPresent, TpmVersion | ConvertTo-Json")
         if ps:
             try:
                 st['tpm'] = json.loads(ps)
@@ -1190,7 +1191,7 @@ def get_execution_artifacts():
         amcache = "C:\\Windows\\AppCompat\\Programs\\Amcache.hve"
         if os.path.isfile(amcache):
             artifacts['amcache_present'] = True
-        ps = run_powershell("Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist'")
+        ps = run_powershell("Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist' -ErrorAction SilentlyContinue")
         if ps:
             artifacts['userassist'] = ps
     return artifacts
@@ -1254,7 +1255,7 @@ def get_containers_vms():
     if os.path.isdir('/var/lib/lxc'):
         virt['lxc_present'] = True
     if get_os() == 'windows':
-        ps = run_powershell("Get-VM | Select-Object Name, State, MemoryStartup | ConvertTo-Json")
+        ps = run_powershell("Get-VM -ErrorAction SilentlyContinue | Select-Object Name, State, MemoryStartup | ConvertTo-Json")
         if ps:
             virt['hyperv_vms'] = ps
     return virt
@@ -1270,10 +1271,10 @@ def get_encryption_status():
         if out:
             enc['luks_headers'] = out
     elif os_type == 'windows':
-        ps = run_powershell("Get-BitLockerVolume | Select-Object MountPoint, ProtectionStatus, EncryptionPercentage | ConvertTo-Json")
+        ps = run_powershell("Get-BitLockerVolume -ErrorAction SilentlyContinue | Select-Object MountPoint, ProtectionStatus, EncryptionPercentage | ConvertTo-Json")
         if ps:
             enc['bitlocker'] = ps
-        ps = run_powershell("manage-bde -status")
+        ps = run_powershell("manage-bde -status -ErrorAction SilentlyContinue")
         if ps:
             enc['manage_bde'] = ps
     elif os_type == 'macos':
@@ -1309,13 +1310,13 @@ def get_stealth_persistence():
     persistence = {}
     os_type = get_os()
     if os_type == 'windows':
-        ps = run_powershell("Get-WmiObject -Namespace root\\subscription -Class __EventFilter | Select-Object Name, EventNamespace, Query")
+        ps = run_powershell("Get-WmiObject -Namespace root\\subscription -Class __EventFilter -ErrorAction SilentlyContinue | Select-Object Name, EventNamespace, Query | ConvertTo-Json")
         if ps:
             persistence['wmi_filters'] = ps
-        ps = run_powershell("Get-WmiObject -Namespace root\\subscription -Class CommandLineEventConsumer | Select-Object Name, CommandLineTemplate")
+        ps = run_powershell("Get-WmiObject -Namespace root\\subscription -Class CommandLineEventConsumer -ErrorAction SilentlyContinue | Select-Object Name, CommandLineTemplate | ConvertTo-Json")
         if ps:
             persistence['wmi_consumers'] = ps
-        out, _, _ = run_command("schtasks /query /fo csv /v | findstr /i 'action'")
+        out, _, _ = run_command("schtasks /query /fo csv /v")
         persistence['scheduled_tasks_detailed'] = out
     elif os_type == 'linux':
         if command_exists('systemctl'):
@@ -1362,10 +1363,10 @@ def get_security_policies():
         if out:
             policy['sysctl_hardening'] = out
     elif os_type == 'windows':
-        ps = run_powershell("auditpol /get /category:*")
+        ps = run_powershell("auditpol /get /category:* -ErrorAction SilentlyContinue")
         if ps:
             policy['audit_policies'] = ps
-        ps = run_powershell("Get-MpComputerStatus")
+        ps = run_powershell("Get-MpComputerStatus -ErrorAction SilentlyContinue")
         if ps:
             policy['defender_status'] = ps
     return policy
@@ -1374,7 +1375,7 @@ def get_ipc_artifacts():
     ipc = {}
     os_type = get_os()
     if os_type == 'windows':
-        ps = run_powershell("Get-CimInstance -ClassName Win32_DCOMApplication | Select-Object Name, AppID | ConvertTo-Json")
+        ps = run_powershell("Get-CimInstance -ClassName Win32_DCOMApplication -ErrorAction SilentlyContinue | Select-Object Name, AppID | ConvertTo-Json")
         if ps:
             ipc['dcom_apps'] = ps
     elif os_type == 'linux':
@@ -1515,7 +1516,7 @@ def get_installed_certificates() -> Dict[str, Any]:
     certs = {}
     os_type = get_os()
     if os_type == 'windows':
-        ps = run_powershell("Get-ChildItem -Path Cert:\\ -Recurse | Select-Object Subject, Issuer, NotAfter, SerialNumber | ConvertTo-Json")
+        ps = run_powershell("Get-ChildItem -Path Cert:\\ -Recurse -ErrorAction SilentlyContinue | Select-Object Subject, Issuer, NotAfter, SerialNumber | ConvertTo-Json")
         if ps:
             certs['cert_store_short'] = ps[:5000]
         out, _, _ = run_command("certutil -store root")
@@ -1540,7 +1541,7 @@ def get_printers_info() -> Dict[str, Any]:
     printers = {}
     os_type = get_os()
     if os_type == 'windows':
-        ps = run_powershell("Get-WmiObject Win32_Printer | Select-Object Name, PortName, DriverName, Network | ConvertTo-Json")
+        ps = run_powershell("Get-WmiObject Win32_Printer -ErrorAction SilentlyContinue | Select-Object Name, PortName, DriverName, Network | ConvertTo-Json")
         if ps:
             printers['wmi_printers'] = ps
         out, _, _ = run_command("wmic printer get name, portname, shared, network /format:csv")
@@ -1566,9 +1567,12 @@ def get_bluetooth_devices() -> Dict[str, Any]:
     bt = {}
     os_type = get_os()
     if os_type == 'windows':
-        ps = run_powershell("Get-PnpDevice -Class Bluetooth | Select-Object FriendlyName, Status, InstanceId | ConvertTo-Json")
+        ps = run_powershell("Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue | Select-Object FriendlyName, Status, InstanceId | ConvertTo-Json")
         if ps:
-            bt['bluetooth_devices'] = ps
+            try:
+                bt['bluetooth_devices'] = json.loads(ps)
+            except:
+                bt['bluetooth_raw'] = ps
         try:
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Services\BTHPORT\Parameters\Devices")
             devices = []
@@ -1611,7 +1615,7 @@ def get_shadow_copies() -> Dict[str, Any]:
         out, _, _ = run_command("vssadmin list shadowstorage")
         if out:
             shadows['vssadmin_storage'] = out
-        ps = run_powershell("Get-CimInstance Win32_ShadowCopy | Select-Object ID, VolumeName, InstallDate | ConvertTo-Json")
+        ps = run_powershell("Get-CimInstance Win32_ShadowCopy -ErrorAction SilentlyContinue | Select-Object ID, VolumeName, InstallDate | ConvertTo-Json")
         if ps:
             shadows['cim_shadow_copies'] = ps
     elif os_type == 'linux':
@@ -1635,7 +1639,7 @@ def get_proxy_settings() -> Dict[str, Any]:
         out, _, _ = run_command("reg query \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\" | findstr Proxy")
         if out:
             proxy['registry_proxy'] = out
-        ps = run_powershell("Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' | Select-Object ProxyEnable, ProxyServer, ProxyOverride")
+        ps = run_powershell("Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -ErrorAction SilentlyContinue | Select-Object ProxyEnable, ProxyServer, ProxyOverride | ConvertTo-Json")
         if ps:
             proxy['powershell_proxy'] = ps
         try:
@@ -1671,7 +1675,7 @@ def get_proxy_settings() -> Dict[str, Any]:
     return proxy
 
 # ==========================================================================
-# SECCIÓN 5: RED, USUARIOS Y LOGS (ya estaban pero las añado completas)
+# SECCIÓN 5: RED, USUARIOS Y LOGS (ya estables)
 # ==========================================================================
 
 def get_network_info() -> Dict[str, Any]:
@@ -1710,9 +1714,12 @@ def get_network_info() -> Dict[str, Any]:
         out, _, _ = run_command('ipconfig /all')
         if out:
             net['ipconfig'] = out
-        ps = run_powershell('Get-DnsClientServerAddress | Select-Object InterfaceAlias, ServerAddresses')
+        ps = run_powershell("Get-DnsClientServerAddress -ErrorAction SilentlyContinue | Select-Object InterfaceAlias, ServerAddresses | ConvertTo-Json")
         if ps:
-            net['dns_powershell'] = ps
+            try:
+                net['dns_powershell'] = json.loads(ps)
+            except:
+                net['dns_powershell_raw'] = ps
     elif os_type == 'macos':
         out, _, _ = run_command('netstat -rn')
         if out:
@@ -1760,7 +1767,7 @@ def get_users_info() -> Dict[str, Any]:
         out, _, _ = run_command('net localgroup')
         if out:
             users_info['net_localgroup'] = out
-        ps = run_powershell('Get-EventLog -LogName Security -InstanceId 4624 -Newest 50 | Select-Object TimeGenerated, ReplacementStrings')
+        ps = run_powershell("Get-EventLog -LogName Security -InstanceId 4624 -Newest 50 -ErrorAction SilentlyContinue | Select-Object TimeGenerated, ReplacementStrings | ConvertTo-Json")
         if ps:
             users_info['security_logons'] = ps
     elif os_type == 'macos':
@@ -1790,9 +1797,9 @@ def get_logs_info() -> Dict[str, Any]:
             if out:
                 logs['journalctl'] = out
     elif os_type == 'windows':
-        logs['system'] = run_powershell('Get-EventLog -LogName System -Newest 100 | Select-Object TimeGenerated, EntryType, Source, Message')
-        logs['application'] = run_powershell('Get-EventLog -LogName Application -Newest 100 | Select-Object TimeGenerated, EntryType, Source, Message')
-        logs['security'] = run_powershell('Get-EventLog -LogName Security -Newest 100 | Select-Object TimeGenerated, EntryType, Source, Message')
+        logs['system'] = run_powershell("Get-EventLog -LogName System -Newest 100 -ErrorAction SilentlyContinue | Select-Object TimeGenerated, EntryType, Source, Message | ConvertTo-Json")
+        logs['application'] = run_powershell("Get-EventLog -LogName Application -Newest 100 -ErrorAction SilentlyContinue | Select-Object TimeGenerated, EntryType, Source, Message | ConvertTo-Json")
+        logs['security'] = run_powershell("Get-EventLog -LogName Security -Newest 100 -ErrorAction SilentlyContinue | Select-Object TimeGenerated, EntryType, Source, Message | ConvertTo-Json")
     elif os_type == 'macos':
         log_files = ['system.log', 'kernel.log', 'install.log']
         for f in log_files:
@@ -1835,7 +1842,6 @@ def get_time_info() -> Dict[str, Any]:
 # ==========================================================================
 
 def gather_all_information(parallel: bool = True, tree_root: str = '.', tree_depth: int = 8) -> Dict[str, Any]:
-    """Recopila toda la información y genera el árbol de directorios."""
     functions = [
         ('system', get_system_info),
         ('hardware', get_hardware_info),
@@ -1894,7 +1900,6 @@ def gather_all_information(parallel: bool = True, tree_root: str = '.', tree_dep
                 result[key] = func()
             except Exception as e:
                 result[key] = {'error': str(e)}
-
     # Árbol de directorios (se ejecuta al final, no en paralelo)
     logger.info(colored(f"Generando árbol de directorios de {tree_root} (profundidad {tree_depth})...", Colors.CYAN))
     result['directory_tree'] = {
