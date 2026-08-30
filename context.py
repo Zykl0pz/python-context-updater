@@ -95,7 +95,7 @@ language_map = {
     '.v': 'V', '.re': 'ReasonML', '.res': 'ReScript', '.csv': 'CSV', '.docx': 'Word Document',
     '.xlsx': 'Excel Spreadsheet', '.pptx': 'PowerPoint Presentation', '.odt': 'OpenDocument Text',
     '.ods': 'OpenDocument Spreadsheet', '.odp': 'OpenDocument Presentation', '.ipynb': 'Jupyter Notebook',
-    '.ini': 'INI Config', '.cfg': 'Config File', '.toml': 'TOML', '.pdf': 'PDF Document',
+    '.ini': 'INI Config', '.cfg': 'Config File', '.toml': 'TOML', '.pdf': 'PDF Document',  '.mjs': 'MJS'
 }
 
 # Nombres especiales de archivos de entorno (sin extensión)
